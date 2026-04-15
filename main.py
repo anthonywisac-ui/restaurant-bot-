@@ -314,41 +314,41 @@ async def handle_flow(sender, text, is_button=False):
         await send_category_items(sender, cat_key, session["order"])
         return
 
-    # ITEM ADD (universal)
+# ITEM ADD (universal)
     if text.startswith("ADD_"):
         item_id = text.replace("ADD_", "").upper()
         cat, found_item = find_item(item_id)
 
-    if found_item:
-        if item_id in session["order"]:
-            session["order"][item_id]["qty"] += 1
-        else:
-            session["order"][item_id] = {"item": found_item, "qty": 1}
+        if found_item:
+            if item_id in session["order"]:
+                session["order"][item_id]["qty"] += 1
+            else:
+                session["order"][item_id] = {"item": found_item, "qty": 1}
 
-        session["last_added"] = item_id
-        session["stage"] = "qty_control"
+            session["last_added"] = item_id
+            session["stage"] = "qty_control"
 
-        # BBQ plates: ask sides (doesn't block flow)
-        if item_id in ["BB1", "BB2", "BB4", "BB5"]:
-            await send_text_message(sender, "Quick one 😄 Pick 2 sides: mac & cheese, fries, slaw, baked beans, or salad.")
+            # BBQ plates: ask sides (doesn't block flow)
+            if item_id in ["BB1", "BB2", "BB4", "BB5"]:
+                await send_text_message(sender, "Quick one 😄 Pick 2 sides: mac & cheese, fries, slaw, baked beans, or salad.")
 
-        # SMART UPSELL (only if not declined)
-        if not session.get("upsell_declined", False):
-            if is_burger(item_id) and not (has_any_side(session["order"]) and has_any_drink(session["order"])) and len(session["order"]) <= 2:
-                await send_quick_combo_upsell(sender)
-                return
+            # SMART UPSELL (only if not declined)
+            if not session.get("upsell_declined", False):
+                if is_burger(item_id) and not (has_any_side(session["order"]) and has_any_drink(session["order"])) and len(session["order"]) <= 2:
+                    await send_quick_combo_upsell(sender)
+                    return
 
-            if is_pizza(item_id) and "SD4" not in session["order"] and len(session["order"]) <= 2:
-                await send_quick_upsell(sender, "SD4", "🍗 Want to add 6 wings? Most people grab wings with pizza 😄")
-                return
+                if is_pizza(item_id) and "SD4" not in session["order"] and len(session["order"]) <= 2:
+                    await send_quick_upsell(sender, "SD4", "🍗 Want to add 6 wings? Most people grab wings with pizza 😄")
+                    return
 
-            if is_fish(item_id) and len(session["order"]) <= 2:
-                await send_quick_text_upsell(sender, "Extra tartar/cocktail sauce for +$1? (Reply YES or NO)")
-                await send_qty_control(sender, item_id, found_item, session["order"])
-                return
+                if is_fish(item_id) and len(session["order"]) <= 2:
+                    await send_quick_text_upsell(sender, "Extra tartar/cocktail sauce for +$1? (Reply YES or NO)")
+                    await send_qty_control(sender, item_id, found_item, session["order"])
+                    return
 
-        await send_qty_control(sender, item_id, found_item, session["order"])
-        return
+            await send_qty_control(sender, item_id, found_item, session["order"])
+            return
 
     # QTY CONTROL
     if text in ["QTY_PLUS", "QTY_MINUS"]:
