@@ -498,6 +498,342 @@ async def handle_flow(sender, text, is_button=False):
         await send_menu_suggestion(sender)
         session["conversation"] = []
 
+async def send_main_menu(sender, current_order=None):
+    current_order = current_order or {}
+    total = get_order_total(current_order)
+    cart_text = ""
+    if current_order:
+        count = sum(v["qty"] for v in current_order.values())
+        cart_text = f"\n\n🛒 *Cart: {count} item(s) — ${total:.2f}*"
+
+    url = f"https://graph.facebook.com/v18.0/{WHATSAPP_PHONE_NUMBER_ID}/messages"
+    headers = {"Authorization": f"Bearer {WHATSAPP_TOKEN}", "Content-Type": "application/json"}
+    payload = {
+        "messaging_product": "whatsapp",
+        "to": sender,
+        "type": "interactive",
+        "interactive": {
+            "type": "list",
+            "header": {"type": "text", "text": "🍽️ Wild Bites Restaurant"},
+            "body": {"text": f"What are you craving today? 😋{cart_text}\n\nTap a category below 👇"},
+            "footer": {"text": "🚀 Fast Delivery | Fresh Food | Best Value"},
+            "action": {
+                "button": "📋 Browse Menu",
+                "sections": [
+                    {"title": "🔥 Start Here", "rows": [
+                        {"id": "CAT_DEALS", "title": "🔥 Deals (Best Value)", "description": "Combos & bundles — save money"},
+                    ]},
+                    {"title": "🍽️ Main", "rows": [
+                        {"id": "CAT_FASTFOOD", "title": "🍔 Burgers & Fast Food", "description": "Smash burgers, chicken — from $10.99"},
+                        {"id": "CAT_PIZZA", "title": "🍕 Pizza (12”)", "description": "Classic & specialty — from $13.99"},
+                        {"id": "CAT_BBQ", "title": "🍖 BBQ", "description": "Ribs, brisket, pulled pork"},
+                        {"id": "CAT_FISH", "title": "🐟 Fish & Seafood", "description": "Fish & chips, salmon, shrimp"},
+                    ]},
+                    {"title": "🥤 Extras", "rows": [
+                        {"id": "CAT_SIDES", "title": "🍟 Sides & Snacks", "description": "Fries, wings, nachos — from $3.99"},
+                        {"id": "CAT_DRINKS", "title": "🥤 Drinks & Shakes", "description": "Soda, lemonade, shakes — from $1.99"},
+                        {"id": "CAT_DESSERTS", "title": "🍰 Desserts", "description": "Cakes, sundaes — from $5.99"},
+                    ]},
+                ]
+            }
+        }
+    }
+
+    async with aiohttp.ClientSession() as s:
+        async with s.post(url, json=payload, headers=headers) as r:
+            _ = await r.text()
+
+# ===== CHUNK 2 START: send_category_items =====
+async def send_category_items(sender, cat_key, current_order):
+    cat = MENU[cat_key]
+    total = get_order_total(current_order)
+    cart_text = f"\n\n🛒 Cart Total: ${total:.2f}" if current_order else ""
+
+    rows = []
+    for item_id, item in cat["items"].items():
+        in_cart = current_order.get(item_id, {}).get("qty", 0)
+        cart_indicator = f" ✅x{in_cart}" if in_cart else ""
+        rows.append({
+            "id": f"ADD_{item_id}",
+            "title": f"{item['emoji']} {item['name']}{cart_indicator}",
+            "description": f"${item['price']:.2f} • {item['desc']}"
+        })
+
+    url = f"https://graph.facebook.com/v18.0/{WHATSAPP_PHONE_NUMBER_ID}/messages"
+    headers = {"Authorization": f"Bearer {WHATSAPP_TOKEN}", "Content-Type": "application/json"}
+    payload = {
+        "messaging_product": "whatsapp",
+        "to": sender,
+        "type": "interactive",
+        "interactive": {
+            "type": "list",
+            "header": {"type": "text", "text": cat["name"]},
+            "body": {"text": f"Tap any item to add to your cart 👇{cart_text}"},
+            "footer": {"text": "✅ in cart shows what you've already added"},
+            "action": {
+                "button": "Select Item",
+                "sections": [{"title": cat["name"], "rows": rows}]
+            }
+        }
+    }
+
+    async with aiohttp.ClientSession() as s:
+        async with s.post(url, json=payload, headers=headers) as r:
+            _ = await r.text()
+# ===== CHUNK 2 END =====
+
+# ===== CHUNK 3 START: send_qty_control =====
+async def send_qty_control(sender, item_id, item, order):
+    qty = order.get(item_id, {}).get("qty", 1)
+    subtotal = item["price"] * qty
+    total = get_order_total(order)
+    order_text = get_order_text(order)
+
+    url = f"https://graph.facebook.com/v18.0/{WHATSAPP_PHONE_NUMBER_ID}/messages"
+    headers = {"Authorization": f"Bearer {WHATSAPP_TOKEN}", "Content-Type": "application/json"}
+    payload = {
+        "messaging_product": "whatsapp",
+        "to": sender,
+        "type": "interactive",
+        "interactive": {
+            "type": "button",
+            "header": {"type": "text", "text": f"✅ {item['emoji']} Added to Cart!"},
+            "body": {
+                "text": (
+                    f"*{item['name']}*\n"
+                    f"Qty: {qty} × ${item['price']:.2f} = *${subtotal:.2f}*\n\n"
+                    f"{'─'*20}\n📋 *Your Order:*\n{order_text}\n"
+                    f"{'─'*20}\n💰 *Total: ${total:.2f}*"
+                )
+            },
+            "footer": {"text": "Wild Bites Restaurant"},
+            "action": {
+                "buttons": [
+                    {"type": "reply", "reply": {"id": "QTY_MINUS", "title": "➖ Remove One"}},
+                    {"type": "reply", "reply": {"id": "QTY_PLUS", "title": "➕ Add One More"}},
+                    {"type": "reply", "reply": {"id": "ADD_MORE", "title": "🍽️ Add More Items"}},
+                ]
+            }
+        }
+    }
+
+    async with aiohttp.ClientSession() as s:
+        async with s.post(url, json=payload, headers=headers) as r:
+            _ = await r.text()
+
+    await send_checkout_prompt(sender, total)
+# ===== CHUNK 3 END =====
+# ===== CHUNK 4 START: send_checkout_prompt =====
+async def send_checkout_prompt(sender, total):
+    url = f"https://graph.facebook.com/v18.0/{WHATSAPP_PHONE_NUMBER_ID}/messages"
+    headers = {"Authorization": f"Bearer {WHATSAPP_TOKEN}", "Content-Type": "application/json"}
+    payload = {
+        "messaging_product": "whatsapp",
+        "to": sender,
+        "type": "interactive",
+        "interactive": {
+            "type": "button",
+            "body": {"text": "Ready to place your order? 🚀"},
+            "action": {
+                "buttons": [
+                    {"type": "reply", "reply": {"id": "CHECKOUT", "title": f"✅ Checkout ${total:.2f}"}},
+                    {"type": "reply", "reply": {"id": "VIEW_CART", "title": "🛒 View Cart"}},
+                ]
+            }
+        }
+    }
+    async with aiohttp.ClientSession() as s:
+        async with s.post(url, json=payload, headers=headers) as r:
+            _ = await r.text()
+# ===== CHUNK 4 END =====
+# ===== CHUNK 5 START: send_dessert_upsell =====
+async def send_dessert_upsell(sender, order):
+    total = get_order_total(order)
+
+    url = f"https://graph.facebook.com/v18.0/{WHATSAPP_PHONE_NUMBER_ID}/messages"
+    headers = {"Authorization": f"Bearer {WHATSAPP_TOKEN}", "Content-Type": "application/json"}
+    payload = {
+        "messaging_product": "whatsapp",
+        "to": sender,
+        "type": "interactive",
+        "interactive": {
+            "type": "button",
+            "header": {"type": "text", "text": "🍰 Save room for dessert?"},
+            "body": {"text": f"Your order is ${total:.2f}.\n\nWant to add a dessert? 😍"},
+            "footer": {"text": "Wild Bites Restaurant"},
+            "action": {
+                "buttons": [
+                    {"type": "reply", "reply": {"id": "YES_UPSELL", "title": "🍰 Yes, show desserts"}},
+                    {"type": "reply", "reply": {"id": "NO_UPSELL", "title": "✅ No, continue"}},
+                ]
+            }
+        }
+    }
+    async with aiohttp.ClientSession() as s:
+        async with s.post(url, json=payload, headers=headers) as r:
+            _ = await r.text()
+# ===== CHUNK 5 END =====
+# ===== CHUNK 6 START: send_cart_view =====
+async def send_cart_view(sender, order):
+    if not order:
+        await send_text_message(sender, "🛒 Your cart is empty!\n\nType *menu* to browse options 😊")
+        return
+
+    total = get_order_total(order)
+    order_text = get_order_text(order)
+
+    url = f"https://graph.facebook.com/v18.0/{WHATSAPP_PHONE_NUMBER_ID}/messages"
+    headers = {"Authorization": f"Bearer {WHATSAPP_TOKEN}", "Content-Type": "application/json"}
+    payload = {
+        "messaging_product": "whatsapp",
+        "to": sender,
+        "type": "interactive",
+        "interactive": {
+            "type": "button",
+            "header": {"type": "text", "text": "🛒 Your Cart"},
+            "body": {"text": f"{order_text}\n\n{'─'*25}\n💰 *Subtotal: ${total:.2f}*"},
+            "footer": {"text": "Wild Bites Restaurant"},
+            "action": {
+                "buttons": [
+                    {"type": "reply", "reply": {"id": "CHECKOUT", "title": f"✅ Checkout ${total:.2f}"}},
+                    {"type": "reply", "reply": {"id": "ADD_MORE", "title": "➕ Add More"}},
+                    {"type": "reply", "reply": {"id": "CANCEL_ORDER", "title": "❌ Clear Cart"}},
+                ]
+            }
+        }
+    }
+    async with aiohttp.ClientSession() as s:
+        async with s.post(url, json=payload, headers=headers) as r:
+            _ = await r.text()
+# ===== CHUNK 6 END =====
+# ===== CHUNK 7 START: send_order_summary =====
+async def send_order_summary(sender, order):
+    total = get_order_total(order)
+    tax = total * 0.08
+    grand_total = total + tax
+    order_text = get_order_text(order)
+
+    url = f"https://graph.facebook.com/v18.0/{WHATSAPP_PHONE_NUMBER_ID}/messages"
+    headers = {"Authorization": f"Bearer {WHATSAPP_TOKEN}", "Content-Type": "application/json"}
+    payload = {
+        "messaging_product": "whatsapp",
+        "to": sender,
+        "type": "interactive",
+        "interactive": {
+            "type": "button",
+            "header": {"type": "text", "text": "📋 Order Summary"},
+            "body": {
+                "text": (
+                    f"{order_text}\n\n{'─'*25}\n"
+                    f"💰 Subtotal: ${total:.2f}\n"
+                    f"📊 Tax (8%): ${tax:.2f}\n"
+                    f"{'─'*25}\n"
+                    f"💵 *Total: ${grand_total:.2f}*\n\n"
+                    f"Ready to confirm? ✅"
+                )
+            },
+            "footer": {"text": "Wild Bites Restaurant"},
+            "action": {
+                "buttons": [
+                    {"type": "reply", "reply": {"id": "CONFIRM_ORDER", "title": "✅ Confirm"}},
+                    {"type": "reply", "reply": {"id": "ADD_MORE", "title": "➕ Add More"}},
+                    {"type": "reply", "reply": {"id": "CANCEL_ORDER", "title": "❌ Cancel"}},
+                ]
+            }
+        }
+    }
+    async with aiohttp.ClientSession() as s:
+        async with s.post(url, json=payload, headers=headers) as r:
+            _ = await r.text()
+# ===== CHUNK 7 END =====
+# ===== CHUNK 8 START: delivery + payment buttons =====
+async def send_delivery_buttons(sender, name):
+    url = f"https://graph.facebook.com/v18.0/{WHATSAPP_PHONE_NUMBER_ID}/messages"
+    headers = {"Authorization": f"Bearer {WHATSAPP_TOKEN}", "Content-Type": "application/json"}
+    payload = {
+        "messaging_product": "whatsapp",
+        "to": sender,
+        "type": "interactive",
+        "interactive": {
+            "type": "button",
+            "header": {"type": "text", "text": f"🚚 Hey {name}! Delivery or pickup?"},
+            "body": {"text": "🚚 Delivery (30–45 mins)\n🏪 Pickup (15–20 mins)"},
+            "footer": {"text": "Wild Bites Restaurant"},
+            "action": {
+                "buttons": [
+                    {"type": "reply", "reply": {"id": "DELIVERY", "title": "🚚 Delivery"}},
+                    {"type": "reply", "reply": {"id": "PICKUP", "title": "🏪 Pickup"}},
+                ]
+            }
+        }
+    }
+    async with aiohttp.ClientSession() as s:
+        async with s.post(url, json=payload, headers=headers) as r:
+            _ = await r.text()
+
+async def send_payment_buttons(sender, name):
+    url = f"https://graph.facebook.com/v18.0/{WHATSAPP_PHONE_NUMBER_ID}/messages"
+    headers = {"Authorization": f"Bearer {WHATSAPP_TOKEN}", "Content-Type": "application/json"}
+    payload = {
+        "messaging_product": "whatsapp",
+        "to": sender,
+        "type": "interactive",
+        "interactive": {
+            "type": "button",
+            "header": {"type": "text", "text": "💳 How would you like to pay?"},
+            "body": {"text": "Choose your payment method:"},
+            "footer": {"text": "Wild Bites Restaurant"},
+            "action": {
+                "buttons": [
+                    {"type": "reply", "reply": {"id": "CASH", "title": "💵 Cash"}},
+                    {"type": "reply", "reply": {"id": "CARD", "title": "💳 Card"}},
+                    {"type": "reply", "reply": {"id": "APPLE_PAY", "title": "📱 Apple/Google Pay"}},
+                ]
+            }
+        }
+    }
+    async with aiohttp.ClientSession() as s:
+        async with s.post(url, json=payload, headers=headers) as r:
+            _ = await r.text()
+# ===== CHUNK 8 END =====
+# ===== CHUNK 9 START: send_order_confirmed =====
+async def send_order_confirmed(sender, session_data):
+    order = session_data.get("order", {})
+    total = get_order_total(order)
+    tax = total * 0.08
+    grand_total = total + tax
+    order_text = get_order_text(order)
+
+    delivery_type = session_data.get("delivery_type", "pickup")
+    address = session_data.get("address", "")
+    payment = session_data.get("payment", "Cash")
+    name = session_data.get("name", "Customer")
+
+    order_id = random.randint(10000, 99999)
+    eta = "30-45 minutes" if delivery_type == "delivery" else "15-20 minutes"
+
+    msg = f"""🎉 *Order Confirmed, {name}!*
+
+📋 *Order #{order_id}*
+
+{order_text}
+
+{'─'*25}
+💰 Subtotal: ${total:.2f}
+📊 Tax (8%): ${tax:.2f}
+{'─'*25}
+💵 *Total: ${grand_total:.2f}*
+
+{'🚚 Delivery to: ' + address if delivery_type == 'delivery' else '🏪 Store Pickup'}
+💳 Payment: {payment}
+⏱️ Ready in: *{eta}*
+
+Thank you for choosing Wild Bites! 🍔
+Type *Hi* to order again anytime!"""
+
+    await send_text_message(sender, msg)
+# ===== CHUNK 9 END =====
+
 # ----------------------------
 # AI RESPONSE (Groq)
 # ----------------------------
