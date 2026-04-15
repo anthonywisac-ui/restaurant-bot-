@@ -503,3 +503,103 @@ async def handle_flow(sender, text, is_button=False):
 # ----------------------------
 async def get_ai_response(sender, user_message, extra_instruction=""):
     system_prompt = f"""You are Alex, a friendly customer service rep at Wild Bites Restaurant in the US.
+
+Your personality:
+- Warm, friendly, helpful — like a real human staff member
+- Casual but professional
+- Use emojis naturally (not too many)
+- Short responses — max 3-4 sentences
+- Ask only ONE question at a time
+- If someone asks about food, recommend something specific
+- If someone asks about hours: "We're open 10am-11pm daily"
+- If someone asks about location: "We deliver citywide and have a pickup location downtown"
+- NEVER say you're an AI or bot
+- Reply in the same language the user writes in
+
+{MENU_SUMMARY}
+
+{extra_instruction}"""
+
+    headers = {
+        "Authorization": f"Bearer {GROQ_API_KEY}",
+        "Content-Type": "application/json"
+    }
+    payload = {
+        "model": "llama-3.1-8b-instant",
+        "messages": [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_message}
+        ],
+        "temperature": 0.7,
+        "max_tokens": 180
+    }
+    try:
+        async with aiohttp.ClientSession() as s:
+            async with s.post(
+                "https://api.groq.com/openai/v1/chat/completions",
+                json=payload,
+                headers=headers
+            ) as r:
+                result = await r.json()
+                return result["choices"][0]["message"]["content"]
+    except Exception as e:
+        print(f"AI Error: {e}")
+        return "Sorry—quick question: is this for delivery or pickup? 🙂"
+
+
+# ── SEND FUNCTIONS ────────────────────────────────────────────────────
+
+async def send_text_message(to, message):
+    url = f"https://graph.facebook.com/v18.0/{WHATSAPP_PHONE_NUMBER_ID}/messages"
+    headers = {"Authorization": f"Bearer {WHATSAPP_TOKEN}", "Content-Type": "application/json"}
+    payload = {"messaging_product": "whatsapp", "to": to, "type": "text", "text": {"body": message}}
+    async with aiohttp.ClientSession() as s:
+        async with s.post(url, json=payload, headers=headers) as r:
+            _ = await r.text()
+            print(f"Text sent to {to} ({r.status})")
+
+
+async def send_menu_suggestion(sender):
+    url = f"https://graph.facebook.com/v18.0/{WHATSAPP_PHONE_NUMBER_ID}/messages"
+    headers = {"Authorization": f"Bearer {WHATSAPP_TOKEN}", "Content-Type": "application/json"}
+    payload = {
+        "messaging_product": "whatsapp",
+        "to": sender,
+        "type": "interactive",
+        "interactive": {
+            "type": "button",
+            "body": {"text": "Want to place an order? 🍔 Tap below to browse the menu."},
+            "footer": {"text": "Wild Bites Restaurant"},
+            "action": {"buttons": [
+                {"type": "reply", "reply": {"id": "SHOW_MENU", "title": "📋 Show Menu"}},
+            ]}
+        }
+    }
+    async with aiohttp.ClientSession() as s:
+        async with s.post(url, json=payload, headers=headers) as r:
+            _ = await r.text()
+            print("Menu suggestion sent")
+
+
+# NOTE: Reuse your existing send_main_menu() / send_category_items() / send_qty_control()
+# If those are also broken indentation, they must be fixed too.
+
+@app.post("/twilio-call")
+async def twilio_call(request: Request):
+    twiml = """<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+  <Say voice="alice">Welcome to Wild Bites Restaurant. Please send us a WhatsApp message to place your order. Thank you!</Say>
+</Response>"""
+    return HTMLResponse(content=twiml, media_type="application/xml")
+
+
+@app.post("/twilio-sms")
+async def twilio_sms(request: Request):
+    form = await request.form()
+    print(f"SMS: {form.get('Body')} from {form.get('From')}")
+    return {"status": "ok"}
+
+
+if __name__ == "__main__":
+    port = int(os.getenv("PORT", "8000"))
+    uvicorn.run(app, host="0.0.0.0", port=port, log_level="info")
