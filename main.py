@@ -50,10 +50,9 @@ def get_session(sender):
 # ----------------------------
 MENU = {
     "deals": {
-        "name": "Deals (Best Value)",
-        "image": "https://images.unsplash.com/photo-1568901346375-23c9450c58cd?w=800&q=80",
+        "name": "🔥 Deals (Best Value)",
         "items": {
-            "DL1": {"name": "Burger Combo Add-on", "price": 4.99, "emoji": "🔥", "desc": "Add fries + soda to any burger","image": "https://images.unsplash.com/photo-1568901346375-23c9450c58cd?w=800"},
+            "DL1": {"name": "Burger Combo Add-on", "price": 4.99, "emoji": "🔥", "desc": "Add fries + soda to any burger"},
             "DL2": {"name": "Double Smash Meal Deal", "price": 18.99, "emoji": "🍔", "desc": "Smash burger + fries + soda"},
             "DL3": {"name": "Pizza + Wings Deal", "price": 21.99, "emoji": "🍕", "desc": "Any 12” pizza + 6 wings"},
             "DL4": {"name": "Family Pizza Deal", "price": 29.99, "emoji": "👨‍👩‍👧‍👦", "desc": "2 pizzas + 2 sodas"},
@@ -63,8 +62,7 @@ MENU = {
     },
 
     "fastfood": {
-        "name": "Burgers & Fast Food",
-        "image": "https://images.unsplash.com/photo-1568901346375-23c9450c58cd?w=800&q=80",
+        "name": "🍔 Burgers & Fast Food",
         "items": {
             "FF1": {"name": "Classic Smash Burger", "price": 12.99, "emoji": "🍔", "desc": "Double patty, special sauce, lettuce"},
             "FF2": {"name": "Crispy Chicken Sandwich", "price": 11.99, "emoji": "🍗", "desc": "Crispy fried chicken, pickles, mayo"},
@@ -75,8 +73,7 @@ MENU = {
     },
 
     "pizza": {
-        "name": "Pizza (12\")",
-        "image": "https://images.unsplash.com/photo-1565299624946-b28f40a0ae38?w=800&q=80",
+        "name": "🍕 Pizza (12”)",
         "items": {
             "PZ1": {"name": "Margherita Classic", "price": 13.99, "emoji": "🍕", "desc": "Fresh mozzarella, tomato, basil"},
             "PZ2": {"name": "BBQ Chicken Pizza", "price": 15.99, "emoji": "🍗", "desc": "Grilled chicken, BBQ sauce, red onions"},
@@ -87,8 +84,7 @@ MENU = {
     },
 
     "bbq": {
-        "name": "BBQ",
-        "image": "https://images.unsplash.com/photo-1544025162-d76694265947?w=800&q=80",
+        "name": "🍖 BBQ",
         "items": {
             "BB1": {"name": "Half Rack Ribs", "price": 18.99, "emoji": "🍖", "desc": "Smoky ribs, BBQ glaze (choose 2 sides)"},
             "BB2": {"name": "Full Rack Ribs", "price": 29.99, "emoji": "🍖", "desc": "Full rack (choose 2 sides)"},
@@ -99,8 +95,7 @@ MENU = {
     },
 
     "fish": {
-        "name": "Fish & Seafood",
-        "image": "https://images.unsplash.com/photo-1519708227418-c8fd9a32b7a2?w=800&q=80",
+        "name": "🐟 Fish & Seafood",
         "items": {
             "FS1": {"name": "Fish & Chips (Cod)", "price": 15.99, "emoji": "🐟", "desc": "Beer-battered cod, fries, tartar"},
             "FS2": {"name": "Blackened Salmon Plate", "price": 19.99, "emoji": "🍣", "desc": "Rice + side salad, lemon butter"},
@@ -110,8 +105,7 @@ MENU = {
     },
 
     "sides": {
-        "name": "Sides & Snacks",
-        "image": "https://images.unsplash.com/photo-1576107232684-1279f390859f?w=800&q=80",
+        "name": "🍟 Sides & Snacks",
         "items": {
             "SD1": {"name": "Crispy French Fries", "price": 3.99, "emoji": "🍟", "desc": "Golden & crispy, seasoned salt"},
             "SD2": {"name": "Onion Rings", "price": 4.99, "emoji": "⭕", "desc": "Beer battered, crispy"},
@@ -123,8 +117,7 @@ MENU = {
     },
 
     "drinks": {
-        "name": "Drinks & Shakes",
-        "image": "https://images.unsplash.com/photo-1544145945-f90425340c7e?w=800&q=80",
+        "name": "🥤 Drinks & Shakes",
         "items": {
             "DR1": {"name": "Coca Cola", "price": 2.99, "emoji": "🥤", "desc": "Ice cold, 16oz"},
             "DR2": {"name": "Pepsi", "price": 2.99, "emoji": "🥤", "desc": "Ice cold, 16oz"},
@@ -138,8 +131,7 @@ MENU = {
     },
 
     "desserts": {
-        "name": "Desserts",
-        "image": "https://images.unsplash.com/photo-1551024601-bec78aea704b?w=800&q=80",
+        "name": "🍰 Desserts",
         "items": {
             "DS1": {"name": "Chocolate Lava Cake", "price": 6.99, "emoji": "🍫", "desc": "Warm, gooey center, vanilla ice cream"},
             "DS2": {"name": "NY Cheesecake", "price": 5.99, "emoji": "🍰", "desc": "Classic NY style, strawberry topping"},
@@ -602,10 +594,6 @@ async def send_qty_control(sender, item_id, item, order):
     subtotal = item["price"] * qty
     total = get_order_total(order)
     order_text = get_order_text(order)
-    
-    # 🔥 Send item image before showing controls
-if "image" in item:
-    await send_image_message(sender, item["image"], item["name"])
 
     url = f"https://graph.facebook.com/v18.0/{WHATSAPP_PHONE_NUMBER_ID}/messages"
     headers = {"Authorization": f"Bearer {WHATSAPP_TOKEN}", "Content-Type": "application/json"}
@@ -933,26 +921,6 @@ async def send_menu_suggestion(sender):
         async with s.post(url, json=payload, headers=headers) as r:
             _ = await r.text()
             print("Menu suggestion sent")
-async def send_image_message(to, image_url, caption=""):
-    url = f"https://graph.facebook.com/v18.0/{WHATSAPP_PHONE_NUMBER_ID}/messages"
-    headers = {
-        "Authorization": f"Bearer {WHATSAPP_TOKEN}",
-        "Content-Type": "application/json"
-    }
-
-    payload = {
-        "messaging_product": "whatsapp",
-        "to": to,
-        "type": "image",
-        "image": {
-            "link": image_url,
-            "caption": caption
-        }
-    }
-
-    async with aiohttp.ClientSession() as s:
-        async with s.post(url, json=payload, headers=headers) as r:
-            _ = await r.text()
 
 
 # NOTE: Reuse your existing send_main_menu() / send_category_items() / send_qty_control()
