@@ -314,7 +314,7 @@ async def handle_flow(sender, text, is_button=False):
         await send_category_items(sender, cat_key, session["order"])
         return
 
-# ITEM ADD (universal)
+    # ITEM ADD (universal)
 if text.startswith("ADD_"):
     item_id = text.replace("ADD_", "").upper()
     cat, found_item = find_item(item_id)
