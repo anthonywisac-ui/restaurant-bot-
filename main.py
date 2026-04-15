@@ -53,7 +53,7 @@ MENU = {
         "name": "Deals (Best Value)",
         "image": "https://images.unsplash.com/photo-1568901346375-23c9450c58cd?w=800&q=80",
         "items": {
-            "DL1": {"name": "Burger Combo Add-on", "price": 4.99, "emoji": "🔥", "desc": "Add fries + soda to any burger"},
+            "DL1": {"name": "Burger Combo Add-on", "price": 4.99, "emoji": "🔥", "desc": "Add fries + soda to any burger","image": "https://images.unsplash.com/photo-1568901346375-23c9450c58cd?w=800"},
             "DL2": {"name": "Double Smash Meal Deal", "price": 18.99, "emoji": "🍔", "desc": "Smash burger + fries + soda"},
             "DL3": {"name": "Pizza + Wings Deal", "price": 21.99, "emoji": "🍕", "desc": "Any 12” pizza + 6 wings"},
             "DL4": {"name": "Family Pizza Deal", "price": 29.99, "emoji": "👨‍👩‍👧‍👦", "desc": "2 pizzas + 2 sodas"},
@@ -602,6 +602,10 @@ async def send_qty_control(sender, item_id, item, order):
     subtotal = item["price"] * qty
     total = get_order_total(order)
     order_text = get_order_text(order)
+    
+    # 🔥 Send item image before showing controls
+if "image" in item:
+    await send_image_message(sender, item["image"], item["name"])
 
     url = f"https://graph.facebook.com/v18.0/{WHATSAPP_PHONE_NUMBER_ID}/messages"
     headers = {"Authorization": f"Bearer {WHATSAPP_TOKEN}", "Content-Type": "application/json"}
@@ -929,6 +933,26 @@ async def send_menu_suggestion(sender):
         async with s.post(url, json=payload, headers=headers) as r:
             _ = await r.text()
             print("Menu suggestion sent")
+async def send_image_message(to, image_url, caption=""):
+    url = f"https://graph.facebook.com/v18.0/{WHATSAPP_PHONE_NUMBER_ID}/messages"
+    headers = {
+        "Authorization": f"Bearer {WHATSAPP_TOKEN}",
+        "Content-Type": "application/json"
+    }
+
+    payload = {
+        "messaging_product": "whatsapp",
+        "to": to,
+        "type": "image",
+        "image": {
+            "link": image_url,
+            "caption": caption
+        }
+    }
+
+    async with aiohttp.ClientSession() as s:
+        async with s.post(url, json=payload, headers=headers) as r:
+            _ = await r.text()
 
 
 # NOTE: Reuse your existing send_main_menu() / send_category_items() / send_qty_control()
