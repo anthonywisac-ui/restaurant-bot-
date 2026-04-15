@@ -50,7 +50,8 @@ def get_session(sender):
 # ----------------------------
 MENU = {
     "deals": {
-        "name": "🔥 Deals (Best Value)",
+        "name": "Deals (Best Value)",
+        "image": "https://images.unsplash.com/photo-1568901346375-23c9450c58cd?w=800&q=80",
         "items": {
             "DL1": {"name": "Burger Combo Add-on", "price": 4.99, "emoji": "🔥", "desc": "Add fries + soda to any burger"},
             "DL2": {"name": "Double Smash Meal Deal", "price": 18.99, "emoji": "🍔", "desc": "Smash burger + fries + soda"},
@@ -62,7 +63,8 @@ MENU = {
     },
 
     "fastfood": {
-        "name": "🍔 Burgers & Fast Food",
+        "name": "Burgers & Fast Food",
+        "image": "https://images.unsplash.com/photo-1568901346375-23c9450c58cd?w=800&q=80",
         "items": {
             "FF1": {"name": "Classic Smash Burger", "price": 12.99, "emoji": "🍔", "desc": "Double patty, special sauce, lettuce"},
             "FF2": {"name": "Crispy Chicken Sandwich", "price": 11.99, "emoji": "🍗", "desc": "Crispy fried chicken, pickles, mayo"},
@@ -73,7 +75,8 @@ MENU = {
     },
 
     "pizza": {
-        "name": "🍕 Pizza (12”)",
+        "name": "Pizza (12\")",
+        "image": "https://images.unsplash.com/photo-1565299624946-b28f40a0ae38?w=800&q=80",
         "items": {
             "PZ1": {"name": "Margherita Classic", "price": 13.99, "emoji": "🍕", "desc": "Fresh mozzarella, tomato, basil"},
             "PZ2": {"name": "BBQ Chicken Pizza", "price": 15.99, "emoji": "🍗", "desc": "Grilled chicken, BBQ sauce, red onions"},
@@ -84,7 +87,8 @@ MENU = {
     },
 
     "bbq": {
-        "name": "🍖 BBQ",
+        "name": "BBQ",
+        "image": "https://images.unsplash.com/photo-1544025162-d76694265947?w=800&q=80",
         "items": {
             "BB1": {"name": "Half Rack Ribs", "price": 18.99, "emoji": "🍖", "desc": "Smoky ribs, BBQ glaze (choose 2 sides)"},
             "BB2": {"name": "Full Rack Ribs", "price": 29.99, "emoji": "🍖", "desc": "Full rack (choose 2 sides)"},
@@ -95,7 +99,8 @@ MENU = {
     },
 
     "fish": {
-        "name": "🐟 Fish & Seafood",
+        "name": "Fish & Seafood",
+        "image": "https://images.unsplash.com/photo-1519708227418-c8fd9a32b7a2?w=800&q=80",
         "items": {
             "FS1": {"name": "Fish & Chips (Cod)", "price": 15.99, "emoji": "🐟", "desc": "Beer-battered cod, fries, tartar"},
             "FS2": {"name": "Blackened Salmon Plate", "price": 19.99, "emoji": "🍣", "desc": "Rice + side salad, lemon butter"},
@@ -105,7 +110,8 @@ MENU = {
     },
 
     "sides": {
-        "name": "🍟 Sides & Snacks",
+        "name": "Sides & Snacks",
+        "image": "https://images.unsplash.com/photo-1576107232684-1279f390859f?w=800&q=80",
         "items": {
             "SD1": {"name": "Crispy French Fries", "price": 3.99, "emoji": "🍟", "desc": "Golden & crispy, seasoned salt"},
             "SD2": {"name": "Onion Rings", "price": 4.99, "emoji": "⭕", "desc": "Beer battered, crispy"},
@@ -117,7 +123,8 @@ MENU = {
     },
 
     "drinks": {
-        "name": "🥤 Drinks & Shakes",
+        "name": "Drinks & Shakes",
+        "image": "https://images.unsplash.com/photo-1544145945-f90425340c7e?w=800&q=80",
         "items": {
             "DR1": {"name": "Coca Cola", "price": 2.99, "emoji": "🥤", "desc": "Ice cold, 16oz"},
             "DR2": {"name": "Pepsi", "price": 2.99, "emoji": "🥤", "desc": "Ice cold, 16oz"},
@@ -131,7 +138,8 @@ MENU = {
     },
 
     "desserts": {
-        "name": "🍰 Desserts",
+        "name": "Desserts",
+        "image": "https://images.unsplash.com/photo-1551024601-bec78aea704b?w=800&q=80",
         "items": {
             "DS1": {"name": "Chocolate Lava Cake", "price": 6.99, "emoji": "🍫", "desc": "Warm, gooey center, vanilla ice cream"},
             "DS2": {"name": "NY Cheesecake", "price": 5.99, "emoji": "🍰", "desc": "Classic NY style, strawberry topping"},
