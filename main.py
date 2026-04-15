@@ -85,10 +85,15 @@ UPSELL_COMBOS = {
     "PZ3": ["SD4", "DR1"],
 }
 
-# Order keywords to detect intent
-ORDER_KEYWORDS = ["order", "menu", "food", "hungry", "eat", "burger", "pizza", "drink", 
-                  "fries", "chicken", "delivery", "pickup", "want to order", "can i order",
-                  "what do you have", "what's on the menu", "i want", "i'd like", "gimme"]
+MENU_SUMMARY = """
+Wild Bites Restaurant Menu:
+🍔 Burgers: Classic Smash ($12.99), Crispy Chicken ($11.99), BBQ Bacon ($14.99), Veggie ($10.99), Spicy Jalapeño ($13.99)
+🍕 Pizza: Margherita ($13.99), BBQ Chicken ($15.99), Meat Lovers ($17.99), Veggie ($14.99), Buffalo ($16.99)
+🥤 Drinks: Coke/Pepsi ($2.99), OJ ($4.99), Mango Lassi ($5.99), Milkshake ($6.99), Lemonade ($3.99), Iced Coffee ($4.99)
+🍟 Sides: Fries ($3.99), Onion Rings ($4.99), Mac Bites ($5.99), Wings ($8.99), Nachos ($7.99), Salad ($6.99)
+🍰 Desserts: Lava Cake ($6.99), Cheesecake ($5.99), Oreo Shake ($7.99), Brownie Sundae ($6.99)
+Hours: 10am-11pm daily | Delivery: 30-45 mins | Pickup: 15-20 mins | Free delivery over $25
+"""
 
 def get_session(sender):
     if sender not in customer_sessions:
@@ -118,9 +123,7 @@ def get_order_text(order):
         lines.append(f"{item['emoji']} {item['name']} x{qty} — ${subtotal:.2f}")
     return "\n".join(lines)
 
-def is_order_intent(text):
-    text_lower = text.lower()
-    return any(kw in text_lower for kw in ORDER_KEYWORDS)
+# ── WEBHOOK ───────────────────────────────────────────────────────────
 
 @app.get("/webhook")
 async def verify_webhook(request: Request):
@@ -146,119 +149,70 @@ async def handle_webhook(request: Request):
                 interactive = message["interactive"]
                 if interactive["type"] == "button_reply":
                     btn_id = interactive["button_reply"]["id"]
+                    print(f"BTN: {btn_id} from {sender}")
                     await handle_flow(sender, btn_id, is_button=True)
                 elif interactive["type"] == "list_reply":
                     list_id = interactive["list_reply"]["id"]
+                    print(f"LIST: {list_id} from {sender}")
                     await handle_flow(sender, list_id, is_button=True)
     except Exception as e:
         print(f"ERROR: {e}\n{traceback.format_exc()}")
     return {"status": "ok"}
+
+# ── FLOW HANDLER ──────────────────────────────────────────────────────
 
 async def handle_flow(sender, text, is_button=False):
     session = get_session(sender)
     stage = session["stage"]
     text_lower = text.lower().strip()
 
-    # Hard reset
+    # ── RESET ────────────────────────────────────────────────────────
     if text_lower in ["restart", "reset", "start over"]:
         customer_sessions[sender] = {"stage": "ai_chat", "order": {}, "delivery_type": "", "address": "", "name": "", "payment": "", "last_added": None, "conversation": []}
         await send_text_message(sender, "👋 Hey! I'm Alex from Wild Bites. How can I help you today? 😊")
         return
 
-    # ── AI CHAT STAGE ────────────────────────────────────────────────
-    if stage == "ai_chat":
-        # Check if user wants to order
-        if is_order_intent(text_lower) or text_lower in ["hi", "hello", "hey", "menu", "order"]:
-            session["stage"] = "menu"
-            # AI greeting then show menu
-            greeting = await get_ai_response(
-                sender,
-                text,
-                "User wants to order food. Give a warm, friendly 1-line greeting and say you'll show them the menu."
-            )
-            await send_text_message(sender, greeting)
-            await send_main_menu(sender)
-        else:
-            # Pure AI conversation
-            reply = await get_ai_response(sender, text)
-            # Check if AI response suggests ordering
-            await send_text_message(sender, reply)
-            # After 2 AI messages, suggest menu
-            session["conversation"].append(text)
-            if len(session["conversation"]) >= 2:
-                await send_menu_suggestion(sender)
-                session["conversation"] = []
+    # ── CATEGORY BUTTONS — Always works regardless of stage ──────────
+    cat_map = {
+        "CAT_FASTFOOD": "fastfood",
+        "CAT_PIZZA": "pizza",
+        "CAT_DRINKS": "drinks",
+        "CAT_SIDES": "sides",
+        "CAT_DESSERTS": "desserts"
+    }
+    if text in cat_map:
+        cat_key = cat_map[text]
+        session["stage"] = "items"
+        session["current_cat"] = cat_key
+        await send_category_items(sender, cat_key, session["order"])
         return
 
-    # ── ORDER FLOW BUTTONS ───────────────────────────────────────────
-
-    # Show menu button from AI chat
-    if text == "SHOW_MENU":
-        session["stage"] = "menu"
-        await send_main_menu(sender)
-        return
-
-    if stage == "menu":
-        cat_map = {
-            "CAT_FASTFOOD": "fastfood",
-            "CAT_PIZZA": "pizza",
-            "CAT_DRINKS": "drinks",
-            "CAT_SIDES": "sides",
-            "CAT_DESSERTS": "desserts"
-        }
-        if text in cat_map:
-            cat_key = cat_map[text]
-            session["stage"] = "items"
-            session["current_cat"] = cat_key
-            await send_category_items(sender, cat_key, session["order"])
-        elif text == "VIEW_CART":
-            await send_cart_view(sender, session["order"])
-        elif not is_button:
-            # Text in menu stage — let AI handle it
-            if is_order_intent(text_lower):
-                await send_main_menu(sender)
-            else:
-                reply = await get_ai_response(sender, text)
-                await send_text_message(sender, reply)
-        return
-
-    if stage == "items":
-        if text.startswith("ADD_"):
-            item_id = text.replace("ADD_", "")
-            found_item = None
-            for cat_key, cat_data in MENU.items():
-                if item_id in cat_data["items"]:
-                    found_item = cat_data["items"][item_id]
-                    break
-            if found_item:
-                if item_id in session["order"]:
-                    session["order"][item_id]["qty"] += 1
-                else:
-                    session["order"][item_id] = {"item": found_item, "qty": 1}
-                session["last_added"] = item_id
-                session["stage"] = "qty_control"
-                if item_id in UPSELL_COMBOS and len(session["order"]) == 1:
-                    await send_upsell(sender, item_id, found_item, session["order"])
-                else:
-                    await send_qty_control(sender, item_id, found_item, session["order"])
-        elif text == "BACK_MENU":
-            session["stage"] = "menu"
-            await send_main_menu(sender, session["order"])
-        elif text == "CHECKOUT":
-            session["stage"] = "upsell_check"
-            await send_dessert_upsell(sender, session["order"])
-        elif text == "VIEW_CART":
-            await send_cart_view(sender, session["order"])
-        elif not is_button:
-            reply = await get_ai_response(sender, text)
-            await send_text_message(sender, reply)
-        return
-
-    if stage == "qty_control":
-        item_id = session.get("last_added")
-        if text == "QTY_PLUS" and item_id:
+    # ── ITEM ADD — Always works ──────────────────────────────────────
+    if text.startswith("ADD_"):
+        item_id = text.replace("ADD_", "")
+        found_item = None
+        for cat_key, cat_data in MENU.items():
+            if item_id in cat_data["items"]:
+                found_item = cat_data["items"][item_id]
+                break
+        if found_item:
             if item_id in session["order"]:
                 session["order"][item_id]["qty"] += 1
+            else:
+                session["order"][item_id] = {"item": found_item, "qty": 1}
+            session["last_added"] = item_id
+            session["stage"] = "qty_control"
+            if item_id in UPSELL_COMBOS and len(session["order"]) == 1:
+                await send_upsell(sender, item_id, found_item, session["order"])
+            else:
+                await send_qty_control(sender, item_id, found_item, session["order"])
+        return
+
+    # ── QTY CONTROL — Always works ───────────────────────────────────
+    if text in ["QTY_PLUS", "QTY_MINUS"]:
+        item_id = session.get("last_added")
+        if text == "QTY_PLUS" and item_id and item_id in session["order"]:
+            session["order"][item_id]["qty"] += 1
             await send_qty_control(sender, item_id, session["order"][item_id]["item"], session["order"])
         elif text == "QTY_MINUS" and item_id:
             if item_id in session["order"]:
@@ -271,115 +225,124 @@ async def handle_flow(sender, text, is_button=False):
             else:
                 session["stage"] = "menu"
                 await send_main_menu(sender, session["order"])
-        elif text == "ADD_MORE":
-            session["stage"] = "menu"
-            await send_main_menu(sender, session["order"])
-        elif text == "CHECKOUT":
+        return
+
+    # ── CHECKOUT — Always works ──────────────────────────────────────
+    if text == "CHECKOUT":
+        if session["order"]:
             session["stage"] = "upsell_check"
             await send_dessert_upsell(sender, session["order"])
-        elif text == "VIEW_CART":
-            await send_cart_view(sender, session["order"])
+        else:
+            await send_text_message(sender, "🛒 Your cart is empty! Add some items first 😊")
+            await send_main_menu(sender)
         return
 
-    if stage == "upsell_combo":
+    # ── UNIVERSAL BUTTONS ────────────────────────────────────────────
+    if text == "VIEW_CART":
+        await send_cart_view(sender, session["order"])
+        return
+
+    if text in ["ADD_MORE", "BACK_MENU", "SHOW_MENU"]:
+        session["stage"] = "menu"
+        await send_main_menu(sender, session["order"])
+        return
+
+    # ── UPSELL COMBO ─────────────────────────────────────────────────
+    if text in ["YES_COMBO", "NO_COMBO"]:
         if text == "YES_COMBO":
-            combo = session.get("pending_combo", [])
-            for cid in combo:
+            for cid in session.get("pending_combo", []):
                 for cat_key, cat_data in MENU.items():
-                    if cid in cat_data["items"]:
-                        if cid not in session["order"]:
-                            session["order"][cid] = {"item": cat_data["items"][cid], "qty": 1}
-            session["stage"] = "qty_control"
-            last = session.get("last_added")
-            if last and last in session["order"]:
-                await send_qty_control(sender, last, session["order"][last]["item"], session["order"])
-            else:
-                session["stage"] = "menu"
-                await send_main_menu(sender, session["order"])
-        elif text == "NO_COMBO":
-            session["stage"] = "qty_control"
-            last = session.get("last_added")
-            if last and last in session["order"]:
-                await send_qty_control(sender, last, session["order"][last]["item"], session["order"])
+                    if cid in cat_data["items"] and cid not in session["order"]:
+                        session["order"][cid] = {"item": cat_data["items"][cid], "qty": 1}
+        session["stage"] = "qty_control"
+        last = session.get("last_added")
+        if last and last in session["order"]:
+            await send_qty_control(sender, last, session["order"][last]["item"], session["order"])
+        else:
+            await send_main_menu(sender, session["order"])
         return
 
-    if stage == "upsell_check":
+    # ── DESSERT UPSELL ───────────────────────────────────────────────
+    if text in ["YES_UPSELL", "NO_UPSELL"]:
         if text == "YES_UPSELL":
             session["stage"] = "items"
             session["current_cat"] = "desserts"
             await send_category_items(sender, "desserts", session["order"])
-        elif text == "NO_UPSELL":
+        else:
             session["stage"] = "confirm"
             await send_order_summary(sender, session["order"])
         return
 
-    if stage == "confirm":
-        if text == "CONFIRM_ORDER":
-            session["stage"] = "get_name"
-            await send_text_message(sender, "👤 *What's your name?*\n\nJust your first name is fine! 😊")
-        elif text == "ADD_MORE":
-            session["stage"] = "menu"
-            await send_main_menu(sender, session["order"])
-        elif text == "CANCEL_ORDER":
-            customer_sessions[sender] = {"stage": "ai_chat", "order": {}, "delivery_type": "", "address": "", "name": "", "payment": "", "last_added": None, "conversation": []}
-            await send_text_message(sender, "❌ Order cancelled! No worries 😊\n\nFeel free to chat or type *menu* anytime!")
+    # ── ORDER CONFIRM/CANCEL ─────────────────────────────────────────
+    if text == "CONFIRM_ORDER":
+        session["stage"] = "get_name"
+        await send_text_message(sender, "👤 *What's your name?*\n\nJust your first name is fine! 😊")
         return
 
+    if text == "CANCEL_ORDER":
+        customer_sessions[sender] = {"stage": "ai_chat", "order": {}, "delivery_type": "", "address": "", "name": "", "payment": "", "last_added": None, "conversation": []}
+        await send_text_message(sender, "❌ Order cancelled! No worries 😊\n\nType *menu* to start again!")
+        return
+
+    # ── DELIVERY ─────────────────────────────────────────────────────
+    if text in ["DELIVERY", "PICKUP"]:
+        if text == "DELIVERY":
+            session["delivery_type"] = "delivery"
+            session["stage"] = "address"
+            name = session.get("name", "")
+            await send_text_message(sender, f"📍 *Hey {name}! What's your delivery address?*\n\nPlease type your full address:\n\nExample: 123 Main St, Apt 4B, New York, NY 10001")
+        else:
+            session["delivery_type"] = "pickup"
+            session["stage"] = "payment"
+            await send_payment_buttons(sender, session.get("name", ""))
+        return
+
+    # ── PAYMENT ──────────────────────────────────────────────────────
+    if text in ["CASH", "CARD", "APPLE_PAY"]:
+        payment_map = {
+            "CASH": "💵 Cash on Delivery",
+            "CARD": "💳 Credit/Debit Card",
+            "APPLE_PAY": "📱 Apple/Google Pay"
+        }
+        session["payment"] = payment_map[text]
+        await send_order_confirmed(sender, session)
+        customer_sessions[sender] = {"stage": "ai_chat", "order": {}, "delivery_type": "", "address": "", "name": "", "payment": "", "last_added": None, "conversation": []}
+        return
+
+    # ── STAGE-SPECIFIC TEXT ──────────────────────────────────────────
     if stage == "get_name":
         session["name"] = text.title()
         session["stage"] = "delivery"
         await send_delivery_buttons(sender, text.title())
         return
 
-    if stage == "delivery":
-        if text == "DELIVERY":
-            session["delivery_type"] = "delivery"
-            session["stage"] = "address"
-            await send_text_message(sender, f"📍 *{session['name']}, what's your delivery address?*\n\nPlease type your full address:\n\nExample: 123 Main St, Apt 4B, New York, NY 10001")
-        elif text == "PICKUP":
-            session["delivery_type"] = "pickup"
-            session["stage"] = "payment"
-            await send_payment_buttons(sender, session["name"])
-        return
-
     if stage == "address":
         session["address"] = text
         session["stage"] = "payment"
         await send_text_message(sender, f"✅ *Got it!*\n📍 {text}\n\nNow let's sort out payment 👇")
-        await send_payment_buttons(sender, session["name"])
+        await send_payment_buttons(sender, session.get("name", ""))
         return
 
-    if stage == "payment":
-        if text in ["CASH", "CARD", "APPLE_PAY"]:
-            payment_map = {
-                "CASH": "💵 Cash on Delivery",
-                "CARD": "💳 Credit/Debit Card",
-                "APPLE_PAY": "📱 Apple/Google Pay"
-            }
-            session["payment"] = payment_map[text]
-            await send_order_confirmed(sender, session)
-            customer_sessions[sender] = {"stage": "ai_chat", "order": {}, "delivery_type": "", "address": "", "name": "", "payment": "", "last_added": None, "conversation": []}
+    # ── GREETINGS + ORDER INTENT ─────────────────────────────────────
+    if text_lower in ["hi", "hello", "hey", "menu", "order", "start", "salam", "hola"]:
+        session["stage"] = "menu"
+        greeting = await get_ai_response(sender, text, "User said hi or wants to order. Give a warm friendly 1-line greeting only.")
+        await send_text_message(sender, greeting)
+        await send_main_menu(sender)
         return
 
-    # Fallback — AI handles anything else
+    # ── AI HANDLES EVERYTHING ELSE ───────────────────────────────────
     reply = await get_ai_response(sender, text)
     await send_text_message(sender, reply)
+    session["conversation"].append(text)
+    if len(session["conversation"]) >= 2:
+        await send_menu_suggestion(sender)
+        session["conversation"] = []
 
-# ── AI RESPONSE ──────────────────────────────────────────────────────
+# ── AI RESPONSE ───────────────────────────────────────────────────────
+
 async def get_ai_response(sender, user_message, extra_instruction=""):
-    session = get_session(sender)
-
-    menu_summary = """
-Wild Bites Restaurant Menu:
-🍔 Burgers: Classic Smash ($12.99), Crispy Chicken ($11.99), BBQ Bacon ($14.99), Veggie ($10.99), Spicy Jalapeño ($13.99)
-🍕 Pizza: Margherita ($13.99), BBQ Chicken ($15.99), Meat Lovers ($17.99), Veggie ($14.99), Buffalo ($16.99)
-🥤 Drinks: Coke/Pepsi ($2.99), OJ ($4.99), Mango Lassi ($5.99), Milkshake ($6.99), Lemonade ($3.99), Iced Coffee ($4.99)
-🍟 Sides: Fries ($3.99), Onion Rings ($4.99), Mac Bites ($5.99), Wings ($8.99), Nachos ($7.99), Salad ($6.99)
-🍰 Desserts: Lava Cake ($6.99), Cheesecake ($5.99), Oreo Shake ($7.99), Brownie Sundae ($6.99)
-Delivery: 30-45 mins | Pickup: 15-20 mins | Free delivery over $25
-"""
-
-    system_prompt = f"""You are Alex, a friendly and warm customer service representative at Wild Bites Restaurant in the US. 
+    system_prompt = f"""You are Alex, a friendly customer service rep at Wild Bites Restaurant in the US.
 
 Your personality:
 - Warm, friendly, helpful — like a real human staff member
@@ -388,13 +351,12 @@ Your personality:
 - Short responses — max 3-4 sentences
 - If someone asks about food, recommend something specific
 - If someone complains, apologize sincerely and offer to help
-- If someone asks about hours, say "We're open 10am-11pm daily"
-- If someone asks about location, say "We deliver citywide and have a pickup location downtown"
+- If someone asks about hours: "We're open 10am-11pm daily"
+- If someone asks about location: "We deliver citywide and have a pickup location downtown"
 - NEVER say you're an AI or bot
-- If someone wants to order, encourage them and mention the menu
 - Reply in the same language the user writes in
 
-{menu_summary}
+{MENU_SUMMARY}
 
 {extra_instruction}"""
 
@@ -402,17 +364,15 @@ Your personality:
         "Authorization": f"Bearer {GROQ_API_KEY}",
         "Content-Type": "application/json"
     }
-
-    # Build conversation history
-    messages = [{"role": "system", "content": system_prompt}]
-    
     payload = {
         "model": "llama-3.1-8b-instant",
-        "messages": messages + [{"role": "user", "content": user_message}],
+        "messages": [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_message}
+        ],
         "temperature": 0.8,
         "max_tokens": 150
     }
-
     try:
         async with aiohttp.ClientSession() as s:
             async with s.post(
@@ -448,7 +408,7 @@ async def send_menu_suggestion(sender):
     }
     async with aiohttp.ClientSession() as s:
         async with s.post(url, json=payload, headers=headers) as r:
-            print(f"Menu suggestion sent")
+            print("Menu suggestion sent")
 
 async def send_main_menu(sender, current_order={}):
     total = get_order_total(current_order)
@@ -474,16 +434,16 @@ async def send_main_menu(sender, current_order={}):
                     {
                         "title": "🍔 Main Course",
                         "rows": [
-                            {"id": "CAT_FASTFOOD", "title": "🍔 Burgers & Fast Food", "description": "Smash Burgers, Chicken — $10.99+"},
-                            {"id": "CAT_PIZZA", "title": "🍕 Pizza", "description": "Classic & Specialty — $13.99+"},
+                            {"id": "CAT_FASTFOOD", "title": "🍔 Burgers & Fast Food", "description": "Smash Burgers, Chicken — from $10.99"},
+                            {"id": "CAT_PIZZA", "title": "🍕 Pizza", "description": "Classic & Specialty — from $13.99"},
                         ]
                     },
                     {
                         "title": "🥤 Extras",
                         "rows": [
-                            {"id": "CAT_SIDES", "title": "🍟 Sides & Snacks", "description": "Fries, Wings, Nachos — $3.99+"},
-                            {"id": "CAT_DRINKS", "title": "🥤 Drinks & Shakes", "description": "Soft Drinks, Juices, Shakes — $1.99+"},
-                            {"id": "CAT_DESSERTS", "title": "🍰 Desserts", "description": "Cakes, Shakes, Brownies — $5.99+"},
+                            {"id": "CAT_SIDES", "title": "🍟 Sides & Snacks", "description": "Fries, Wings, Nachos — from $3.99"},
+                            {"id": "CAT_DRINKS", "title": "🥤 Drinks & Shakes", "description": "Soft Drinks, Juices, Shakes — from $1.99"},
+                            {"id": "CAT_DESSERTS", "title": "🍰 Desserts", "description": "Cakes, Shakes, Brownies — from $5.99"},
                         ]
                     }
                 ]
@@ -492,12 +452,12 @@ async def send_main_menu(sender, current_order={}):
     }
     async with aiohttp.ClientSession() as s:
         async with s.post(url, json=payload, headers=headers) as r:
-            print(f"Main menu sent")
+            print("Main menu sent")
 
 async def send_category_items(sender, cat_key, current_order):
     cat = MENU[cat_key]
     total = get_order_total(current_order)
-    cart_text = f"\n\n🛒 Cart: ${total:.2f}" if current_order else ""
+    cart_text = f"\n\n🛒 Cart Total: ${total:.2f}" if current_order else ""
     rows = []
     for item_id, item in cat["items"].items():
         in_cart = current_order.get(item_id, {}).get("qty", 0)
@@ -517,8 +477,8 @@ async def send_category_items(sender, cat_key, current_order):
         "interactive": {
             "type": "list",
             "header": {"type": "text", "text": cat["name"]},
-            "body": {"text": f"Tap any item to add to cart! 👇{cart_text}"},
-            "footer": {"text": "Tap item to add • Tap again to increase qty"},
+            "body": {"text": f"Tap any item to add to your cart! 👇{cart_text}"},
+            "footer": {"text": "✅ in cart indicator shows what you've added"},
             "action": {
                 "button": "Select Item",
                 "sections": [{"title": cat["name"], "rows": rows}]
@@ -559,7 +519,7 @@ async def send_qty_control(sender, item_id, item, order):
     }
     async with aiohttp.ClientSession() as s:
         async with s.post(url, json=payload, headers=headers) as r:
-            print(f"Qty control sent")
+            print("Qty control sent")
 
     await send_checkout_prompt(sender, total)
 
@@ -583,7 +543,7 @@ async def send_checkout_prompt(sender, total):
     }
     async with aiohttp.ClientSession() as s:
         async with s.post(url, json=payload, headers=headers) as r:
-            print(f"Checkout prompt sent")
+            print("Checkout prompt sent")
 
 async def send_upsell(sender, item_id, item, order):
     combo = UPSELL_COMBOS.get(item_id, [])
@@ -596,7 +556,7 @@ async def send_upsell(sender, item_id, item, order):
                 combo_names.append(f"{citem['emoji']} {citem['name']}")
                 combo_total += citem["price"]
 
-    session = customer_sessions.get(sender, {})
+    session = get_session(sender)
     session["stage"] = "upsell_combo"
     session["pending_combo"] = combo
     combo_text = " + ".join(combo_names)
@@ -624,7 +584,7 @@ async def send_upsell(sender, item_id, item, order):
     }
     async with aiohttp.ClientSession() as s:
         async with s.post(url, json=payload, headers=headers) as r:
-            print(f"Upsell sent")
+            print("Upsell sent")
 
 async def send_dessert_upsell(sender, order):
     total = get_order_total(order)
@@ -651,7 +611,7 @@ async def send_dessert_upsell(sender, order):
     }
     async with aiohttp.ClientSession() as s:
         async with s.post(url, json=payload, headers=headers) as r:
-            print(f"Dessert upsell sent")
+            print("Dessert upsell sent")
 
 async def send_cart_view(sender, order):
     if not order:
@@ -668,7 +628,7 @@ async def send_cart_view(sender, order):
         "interactive": {
             "type": "button",
             "header": {"type": "text", "text": "🛒 Your Cart"},
-            "body": {"text": f"{order_text}\n\n{'─'*25}\n💰 *Subtotal: ${total:.2f}*\n🚚 Delivery fee at checkout"},
+            "body": {"text": f"{order_text}\n\n{'─'*25}\n💰 *Subtotal: ${total:.2f}*\n🚚 Delivery fee calculated at checkout"},
             "footer": {"text": "Wild Bites Restaurant"},
             "action": {
                 "buttons": [
@@ -681,7 +641,7 @@ async def send_cart_view(sender, order):
     }
     async with aiohttp.ClientSession() as s:
         async with s.post(url, json=payload, headers=headers) as r:
-            print(f"Cart view sent")
+            print("Cart view sent")
 
 async def send_order_summary(sender, order):
     total = get_order_total(order)
@@ -712,7 +672,7 @@ async def send_order_summary(sender, order):
     }
     async with aiohttp.ClientSession() as s:
         async with s.post(url, json=payload, headers=headers) as r:
-            print(f"Order summary sent")
+            print("Order summary sent")
 
 async def send_delivery_buttons(sender, name):
     url = f"https://graph.facebook.com/v18.0/{WHATSAPP_PHONE_NUMBER_ID}/messages"
@@ -738,7 +698,7 @@ async def send_delivery_buttons(sender, name):
     }
     async with aiohttp.ClientSession() as s:
         async with s.post(url, json=payload, headers=headers) as r:
-            print(f"Delivery buttons sent")
+            print("Delivery buttons sent")
 
 async def send_payment_buttons(sender, name):
     url = f"https://graph.facebook.com/v18.0/{WHATSAPP_PHONE_NUMBER_ID}/messages"
@@ -763,7 +723,7 @@ async def send_payment_buttons(sender, name):
     }
     async with aiohttp.ClientSession() as s:
         async with s.post(url, json=payload, headers=headers) as r:
-            print(f"Payment buttons sent")
+            print("Payment buttons sent")
 
 async def send_order_confirmed(sender, session_data):
     order = session_data.get("order", {})
@@ -794,9 +754,9 @@ async def send_order_confirmed(sender, session_data):
 💳 Payment: {payment}
 ⏱️ Ready in: *{eta}*
 
-We'll keep you posted! 📱
+We'll keep you posted! 📱❤️
 
-Thank you for choosing Wild Bites! ❤️🍔
+Thank you for choosing Wild Bites! 🍔
 Type *Hi* to order again anytime!"""
 
     await send_text_message(sender, msg)
