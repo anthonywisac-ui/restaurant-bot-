@@ -268,9 +268,9 @@ async def handle_flow(sender, text, is_button=False):
         return
 
     if text in ["SHOW_MENU", "BACK_MENU", "ADD_MORE"]:
-    session["stage"] = "menu"
-    await send_main_menu(sender, session["order"])
-    return
+        session["stage"] = "menu"
+        await send_main_menu(sender, session["order"])
+        return
 		
     # Quick cart commands: "remove FF1", "qty FF1 2"
     m_remove = re.match(r"^(remove|delete)\s+([a-z0-9]+)$", text_lower)
