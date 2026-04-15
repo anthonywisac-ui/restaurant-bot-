@@ -267,7 +267,7 @@ async def handle_flow(sender, text, is_button=False):
         await send_main_menu(sender, {})
         return
 
-    if text in ["SHOW_MENU", "BACK_MENU", "ADD_MORE"]:
+	if text in ["SHOW_MENU", "BACK_MENU", "ADD_MORE"]:
         session["stage"] = "menu"
         await send_main_menu(sender, session["order"])
         return
@@ -315,9 +315,9 @@ async def handle_flow(sender, text, is_button=False):
         return
 
     # ITEM ADD (universal)
-if text.startswith("ADD_"):
-    item_id = text.replace("ADD_", "").upper()
-    cat, found_item = find_item(item_id)
+    if text.startswith("ADD_"):
+        item_id = text.replace("ADD_", "").upper()
+        cat, found_item = find_item(item_id)
 
     if found_item:
         if item_id in session["order"]:
