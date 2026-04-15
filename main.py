@@ -267,7 +267,7 @@ async def handle_flow(sender, text, is_button=False):
         await send_main_menu(sender, {})
         return
 
-	if text in ["SHOW_MENU", "BACK_MENU", "ADD_MORE"]:
+    if text in ["SHOW_MENU", "BACK_MENU", "ADD_MORE"]:
         session["stage"] = "menu"
         await send_main_menu(sender, session["order"])
         return
