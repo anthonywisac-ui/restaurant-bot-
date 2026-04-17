@@ -394,18 +394,21 @@ def t(lang, key):
 customer_sessions = {}
 last_message_time = {}
 saved_orders = {}
-customer_order_lookup = {}  # customer_number -> order_id
-manager_pending = {}  # order_id -> customer_number
+customer_order_lookup = {}
+manager_pending = {}
+customer_profiles = {}
 
-def new_session():
+def new_session(sender=None):
+    profile = customer_profiles.get(sender, {}) if sender else {}
+    is_returning = bool(profile.get("name"))
     return {
-        "stage": "lang_select",
-        "lang": "en",
+        "stage": "returning" if is_returning else "lang_select",
+        "lang": profile.get("lang", "en"),
         "order": {},
-        "delivery_type": "",
-        "address": "",
-        "name": "",
-        "payment": "",
+        "delivery_type": profile.get("delivery_type", ""),
+        "address": profile.get("address", ""),
+        "name": profile.get("name", ""),
+        "payment": profile.get("payment", ""),
         "last_added": None,
         "current_cat": None,
         "pending_combo": [],
@@ -413,12 +416,52 @@ def new_session():
         "upsell_declined": False,
         "order_id": None,
         "delay_warned": False,
+        "_last_text": "",
+        "deal_context": None,
     }
 
 def get_session(sender):
     if sender not in customer_sessions:
-        customer_sessions[sender] = new_session()
+        customer_sessions[sender] = new_session(sender)
     return customer_sessions[sender]
+
+def save_profile(sender, session):
+    if session.get("name"):
+        profile = customer_profiles.get(sender, {"order_history": []})
+        profile.update({
+            "name": session.get("name", ""),
+            "address": session.get("address", ""),
+            "lang": session.get("lang", "en"),
+            "delivery_type": session.get("delivery_type", ""),
+            "payment": session.get("payment", ""),
+        })
+        if "order_history" not in profile:
+            profile["order_history"] = []
+        customer_profiles[sender] = profile
+
+def add_to_order_history(sender, order_id, order_items):
+    profile = customer_profiles.get(sender, {"order_history": []})
+    if "order_history" not in profile:
+        profile["order_history"] = []
+    profile["order_history"].append({
+        "order_id": order_id,
+        "items": [v["item"]["name"] for v in order_items.values()],
+        "timestamp": time.time()
+    })
+    profile["order_history"] = profile["order_history"][-5:]
+    customer_profiles[sender] = profile
+
+def get_favorite_items(sender):
+    profile = customer_profiles.get(sender, {})
+    history = profile.get("order_history", [])
+    if not history:
+        return []
+    item_counts = {}
+    for order in history:
+        for item in order.get("items", []):
+            item_counts[item] = item_counts.get(item, 0) + 1
+    sorted_items = sorted(item_counts.items(), key=lambda x: x[1], reverse=True)
+    return [item for item, count in sorted_items[:3]]
 
 MENU = {
     "deals": {
@@ -606,13 +649,71 @@ async def handle_flow(sender, text, is_button=False):
 
     # Hard reset
     if text_lower in ["restart", "reset", "start over", "clear"]:
-        customer_sessions[sender] = new_session()
+        customer_sessions[sender] = new_session(sender)
+        customer_sessions[sender]["stage"] = "lang_select"
         await send_language_selection(sender)
         return
 
     # Order status check
     if is_order_status_query(text_lower):
         await handle_order_status(sender, session, lang)
+        return
+
+    # RETURNING CUSTOMER
+    if stage == "returning":
+        profile = customer_profiles.get(sender, {})
+        name = profile.get("name", "")
+        favorites = get_favorite_items(sender)
+        fav_text = f"\n\nYou usually order: {', '.join(favorites)} " if favorites else ""
+        session["stage"] = "returning_choice"
+        await send_returning_customer_menu(sender, name, fav_text, lang)
+        return
+
+    if stage == "returning_choice":
+        if text == "REPEAT_ORDER":
+            profile = customer_profiles.get(sender, {})
+            history = profile.get("order_history", [])
+            if history:
+                last = history[-1]
+                last_items = ", ".join(last.get("items", []))
+                addr = session.get("address", "")
+                await send_repeat_order_confirm(sender, last_items, addr, lang)
+                session["stage"] = "repeat_confirm"
+            else:
+                session["stage"] = "menu"
+                await send_main_menu(sender, session["order"], lang)
+        elif text in ["NEW_ORDER", "REPEAT_ADD_MORE"]:
+            session["stage"] = "menu"
+            await send_main_menu(sender, session["order"], lang)
+        elif text == "CHANGE_ADDRESS":
+            session["stage"] = "address_update"
+            await send_text_message(sender, "Sure! What's your new delivery address? ")
+        elif text == "REPEAT_CONFIRM":
+            profile = customer_profiles.get(sender, {})
+            history = profile.get("order_history", [])
+            if history:
+                last_items = history[-1].get("items", [])
+                for cat_data in MENU.values():
+                    for item_id, item in cat_data["items"].items():
+                        if item["name"] in last_items:
+                            session["order"][item_id] = {"item": item, "qty": 1}
+            if session["order"]:
+                session["stage"] = "confirm"
+                await send_order_summary(sender, session["order"], lang)
+            else:
+                session["stage"] = "menu"
+                await send_main_menu(sender, session["order"], lang)
+        else:
+            session["stage"] = "menu"
+            await send_main_menu(sender, session["order"], lang)
+        return
+
+    if stage == "address_update":
+        session["address"] = text.strip()
+        save_profile(sender, session)
+        await send_text_message(sender, f"Address updated! {text}")
+        session["stage"] = "menu"
+        await send_main_menu(sender, session["order"], lang)
         return
 
     # ── LANGUAGE SELECTION ──────────────────────────────
@@ -757,7 +858,7 @@ async def handle_flow(sender, text, is_button=False):
         return
 
     if text == "CANCEL_ORDER":
-        customer_sessions[sender] = new_session()
+        customer_sessions[sender] = new_session(sender)
         await send_text_message(sender, t(lang, "cancelled"))
         return
 
@@ -788,9 +889,11 @@ async def handle_flow(sender, text, is_button=False):
         session["payment"] = payment_map[text]
         order_id = await send_order_confirmed(sender, session, lang)
         session["order_id"] = order_id
+        save_profile(sender, session)
+        add_to_order_history(sender, order_id, session["order"])
         await notify_manager(sender, session, order_id)
         await save_to_sheet(sender, session, order_id)
-        customer_sessions[sender] = new_session()
+        customer_sessions[sender] = new_session(sender)
         return
 
     # ── STAGE TEXT ───────────────────────────────────────
@@ -896,7 +999,14 @@ Delivery: ${delivery_charge:.2f}
 Payment: {session.get('payment', 'N/A')}
 ETA: {'30-45 mins' if session.get('delivery_type') == 'delivery' else '15-20 mins'}"""
 
-    await send_whatsapp_to_number(MANAGER_NUMBER, msg)
+    reply_guide = (
+        f"\n\nTo update customer, reply:\n"
+        f"ORDER#{order_id} READY\n"
+        f"ORDER#{order_id} OUT FOR DELIVERY\n"
+        f"ORDER#{order_id} DELAYED 15\n"
+        f"ORDER#{order_id} CANCELLED"
+    )
+    await send_whatsapp_to_number(MANAGER_NUMBER, msg + reply_guide)
     print(f"Manager notified: #{order_id}")
 
 async def notify_manager_status(order_id, customer_number):
@@ -1377,6 +1487,51 @@ async def send_menu_suggestion(sender, lang="en"):
     async with aiohttp.ClientSession() as s:
         async with s.post(url, json=payload, headers=headers) as r:
             _ = await r.text()
+
+async def send_returning_customer_menu(sender, name, fav_text, lang="en"):
+    url = f"https://graph.facebook.com/v18.0/{WHATSAPP_PHONE_NUMBER_ID}/messages"
+    headers = {"Authorization": f"Bearer {WHATSAPP_TOKEN}", "Content-Type": "application/json"}
+    payload = {
+        "messaging_product": "whatsapp", "to": sender, "type": "interactive",
+        "interactive": {
+            "type": "button",
+            "header": {"type": "text", "text": f"Welcome back, {name}!"},
+            "body": {"text": f"Great to see you again! What would you like to do today?{fav_text}"},
+            "footer": {"text": "Wild Bites Restaurant"},
+            "action": {"buttons": [
+                {"type": "reply", "reply": {"id": "REPEAT_ORDER", "title": "Repeat Last Order"}},
+                {"type": "reply", "reply": {"id": "NEW_ORDER", "title": "New Order"}},
+                {"type": "reply", "reply": {"id": "CHANGE_ADDRESS", "title": "Change Address"}},
+            ]}
+        }
+    }
+    async with aiohttp.ClientSession() as s:
+        async with s.post(url, json=payload, headers=headers) as r:
+            _ = await r.text()
+            print("Returning customer menu sent")
+
+async def send_repeat_order_confirm(sender, last_items, address, lang="en"):
+    addr_text = f"\nDelivery to: {address}" if address else "\nPickup from store"
+    url = f"https://graph.facebook.com/v18.0/{WHATSAPP_PHONE_NUMBER_ID}/messages"
+    headers = {"Authorization": f"Bearer {WHATSAPP_TOKEN}", "Content-Type": "application/json"}
+    payload = {
+        "messaging_product": "whatsapp", "to": sender, "type": "interactive",
+        "interactive": {
+            "type": "button",
+            "header": {"type": "text", "text": "Repeat Last Order?"},
+            "body": {"text": f"Your last order was:\n{last_items}{addr_text}\n\nWant the same again?"},
+            "footer": {"text": "Wild Bites Restaurant"},
+            "action": {"buttons": [
+                {"type": "reply", "reply": {"id": "REPEAT_CONFIRM", "title": "Yes, Same Order!"}},
+                {"type": "reply", "reply": {"id": "REPEAT_ADD_MORE", "title": "Add More Items"}},
+                {"type": "reply", "reply": {"id": "NEW_ORDER", "title": "Start Fresh"}},
+            ]}
+        }
+    }
+    async with aiohttp.ClientSession() as s:
+        async with s.post(url, json=payload, headers=headers) as r:
+            _ = await r.text()
+            print("Repeat order confirm sent")
 
 async def send_text_message(to, message):
     url = f"https://graph.facebook.com/v18.0/{WHATSAPP_PHONE_NUMBER_ID}/messages"
