@@ -394,6 +394,8 @@ def t(lang, key):
 customer_sessions = {}
 last_message_time = {}
 saved_orders = {}
+customer_order_lookup = {}  # customer_number -> order_id
+manager_pending = {}  # order_id -> customer_number
 
 def new_session():
     return {
@@ -573,6 +575,12 @@ async def handle_webhook(request: Request):
             if msg_type == "text":
                 text = message["text"]["body"].strip()
                 print(f"MSG: {text} from {sender}")
+
+                # Check if this is manager replying with order update
+                if sender == MANAGER_NUMBER:
+                    await handle_manager_reply(text)
+                    return
+
                 await handle_flow(sender, text)
             elif msg_type == "interactive":
                 interactive = message["interactive"]
@@ -594,6 +602,7 @@ async def handle_flow(sender, text, is_button=False):
     lang = session.get("lang", "en")
     text_lower = text.lower().strip()
     session["delay_warned"] = False
+    session["_last_text"] = text  # Store for order number extraction
 
     # Hard reset
     if text_lower in ["restart", "reset", "start over", "clear"]:
@@ -831,23 +840,34 @@ async def handle_flow(sender, text, is_button=False):
         session["conversation"] = []
 
 async def handle_order_status(sender, session, lang):
-    order_id = session.get("order_id")
+    # First check session, then permanent lookup
+    order_id = session.get("order_id") or customer_order_lookup.get(sender)
+
+    # Check if message contains order number directly
+    import re as _re
+    order_match = _re.search(r'\b(\d{5})\b', session.get("_last_text", ""))
+    if order_match:
+        order_id = int(order_match.group(1))
+
     if not order_id:
         await send_text_message(sender, "I don't see an active order for you. Type *menu* to place a new order! 😊")
         return
+
     order_data = saved_orders.get(order_id)
     if not order_data:
         await send_text_message(sender, f"Let me check on order #{order_id} for you! 🔍")
         await notify_manager_status(order_id, sender)
         return
+
     elapsed = (time.time() - order_data["timestamp"]) / 60
     delivery_type = order_data.get("delivery_type", "pickup")
     expected = 45 if delivery_type == "delivery" else 20
+
     if elapsed < expected:
         remaining = int(expected - elapsed)
-        await send_text_message(sender, f"🍳 Order #{order_id} is being prepared!\n\n⏱️ About {remaining} more minutes.\n\nHang tight! 😊")
+        await send_text_message(sender, f"🍳 Your order #{order_id} is being prepared!\n\n⏱️ About {remaining} more minutes.\n\nHang tight! 😊")
     else:
-        await send_text_message(sender, f"🔍 Checking on your order #{order_id} with our team...")
+        await send_text_message(sender, f"🔍 Checking on your order #{order_id} with our team... I'll update you shortly! 😊")
         await notify_manager_status(order_id, sender)
 
 async def notify_manager(customer_number, session, order_id):
@@ -881,6 +901,52 @@ ETA: {'30-45 mins' if session.get('delivery_type') == 'delivery' else '15-20 min
 
 async def notify_manager_status(order_id, customer_number):
     await send_whatsapp_to_number(MANAGER_NUMBER, f"⚠️ Customer +{customer_number} asking about Order #{order_id}. Please update!")
+
+async def handle_manager_reply(text):
+    """
+    Manager sends: ORDER#54535 READY
+    Or: ORDER#54535 DELAYED 20 minutes
+    Or: ORDER#54535 OUT FOR DELIVERY
+    """
+    import re as _re
+    # Extract order number from manager message
+    match = _re.search(r'ORDER#?(\d{5})', text.upper())
+    if not match:
+        print(f"Manager message not an order update: {text}")
+        return
+
+    order_id = int(match.group(1))
+    customer_number = manager_pending.get(order_id)
+
+    if not customer_number:
+        print(f"No customer found for order #{order_id}")
+        return
+
+    order_data = saved_orders.get(order_id, {})
+    customer_name = order_data.get("customer_name", "Customer")
+
+    # Parse status
+    text_upper = text.upper()
+    if "READY" in text_upper and "DELIVERY" not in text_upper:
+        if order_data.get("delivery_type") == "pickup":
+            msg = f"Great news, {customer_name}! 🎉\n\nYour order #{order_id} is *READY for pickup!* 🏪\n\nPlease come collect it at your earliest convenience! 😊"
+        else:
+            msg = f"Great news, {customer_name}! 🎉\n\nYour order #{order_id} is ready and *OUT FOR DELIVERY* 🚚\n\nShould arrive in 15-20 minutes!"
+    elif "OUT FOR DELIVERY" in text_upper or "ON THE WAY" in text_upper:
+        msg = f"Hey {customer_name}! 🚚\n\nYour order #{order_id} is *on the way!*\n\nShould arrive in 15-20 minutes! 😊"
+    elif "DELAYED" in text_upper:
+        # Extract delay time if mentioned
+        delay_match = _re.search(r'DELAYED\s+(\d+)', text_upper)
+        delay_time = delay_match.group(1) + " minutes" if delay_match else "a little longer"
+        msg = f"Hi {customer_name}, just a heads up! ⏱️\n\nYour order #{order_id} will take *{delay_time}* more than expected.\n\nWe apologize for the wait! 🙏"
+    elif "CANCELLED" in text_upper:
+        msg = f"Hi {customer_name}, we're sorry! 😔\n\nUnfortunately order #{order_id} has been *cancelled.*\n\nPlease contact us for a refund or to reorder."
+    else:
+        # Forward raw message as update
+        msg = f"Update on your order #{order_id}: {text}"
+
+    await send_whatsapp_to_number(customer_number, msg)
+    print(f"Manager update sent to customer {customer_number} for order #{order_id}")
 
 async def send_whatsapp_to_number(to_number, message):
     url = f"https://graph.facebook.com/v18.0/{WHATSAPP_PHONE_NUMBER_ID}/messages"
@@ -919,6 +985,9 @@ async def save_to_sheet(customer_number, session, order_id):
     }
 
     saved_orders[order_id] = {**data, "timestamp": time.time()}
+    customer_order_lookup[customer_number] = order_id
+    manager_pending[order_id] = customer_number
+    print(f"Order #{order_id} linked to customer {customer_number}")
 
     if GOOGLE_SHEET_WEBHOOK:
         try:
