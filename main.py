@@ -779,11 +779,11 @@ def get_order_text(order):
         item = v["item"]
         base = f"{item['emoji']} {item['name']} x{v['qty']} — ${item['price'] * v['qty']:.2f}"
         lines.append(base)
-        # FIX #3, #10 — show deal components and sides
+        # FIX #3, #10 — show deal components and sides (use simple indent, WhatsApp-safe)
         for comp in v.get("components", []):
-            lines.append(f"   └ {comp}")
+            lines.append(f"  • {comp}")
         for side in v.get("sides", []):
-            lines.append(f"   └ Side: {side}")
+            lines.append(f"  • Side: {side}")
     return "\n".join(lines)
 
 def find_item(item_id):
@@ -909,6 +909,22 @@ async def handle_webhook(request: Request):
     return {"status": "ok"}
 
 async def handle_flow(sender, text, is_button=False):
+    try:
+        await _handle_flow_inner(sender, text, is_button)
+    except Exception as e:
+        print(f"❌ handle_flow CRASHED for {sender} text={text!r}: {e}\n{traceback.format_exc()}")
+        # Try to recover — send user something useful
+        try:
+            session = get_session(sender)
+            lang = session.get("lang", "en")
+            if session.get("order"):
+                await send_cart_view(sender, session["order"], lang)
+            else:
+                await send_text_message(sender, "Sorry, something glitched on our end. Type *menu* to continue. 🙏")
+        except Exception as inner:
+            print(f"❌ Recovery also failed: {inner}")
+
+async def _handle_flow_inner(sender, text, is_button=False):
     session = get_session(sender)
     stage = session["stage"]
     lang = session.get("lang", "en")
@@ -1132,6 +1148,13 @@ async def handle_flow(sender, text, is_button=False):
         if not found_item:
             return
 
+        # STUCK-STAGE GUARD: if user is tapping a new ADD_ button, they've moved on from
+        # any pending upsell/deal prompt. Clean stale state so we don't drop messages.
+        if stage in {"upsell_combo", "upsell_check"}:
+            session.pop("_pending_upsell_type", None)
+            session["stage"] = "items"
+            stage = "items"
+
         # FIX #2 — DL1 requires burger in cart
         if item_id == "DL1":
             has_burger = any(k.startswith("FF") for k in session["order"])
@@ -1211,7 +1234,7 @@ async def handle_flow(sender, text, is_button=False):
 
         # FIX #2 continued — DL1 pending? attach after burger added
         if (is_burger(item_id)
-                and session.get("deal_context", {}).get("deal_id") == "DL1_PENDING"):
+                and (session.get("deal_context") or {}).get("deal_id") == "DL1_PENDING"):
             dl1_item = MENU["deals"]["items"]["DL1"]
             if "DL1" in session["order"]:
                 session["order"]["DL1"]["qty"] += 1
@@ -1753,9 +1776,17 @@ async def send_qty_control(sender, item_id, item, order, lang="en"):
             ]}
         }
     }
-    async with aiohttp.ClientSession() as s:
-        async with s.post(url, json=payload, headers=headers) as r:
-            _ = await r.text()
+    try:
+        async with aiohttp.ClientSession() as s:
+            async with s.post(url, json=payload, headers=headers) as r:
+                resp = await r.text()
+                if r.status >= 400:
+                    print(f"❌ send_qty_control FAILED {r.status}: {resp[:500]}")
+                    # Fallback: send cart view instead so customer isn't stuck
+                    await send_cart_view(sender, order, lang)
+    except Exception as e:
+        print(f"❌ send_qty_control EXCEPTION: {e}")
+        await send_cart_view(sender, order, lang)
 
 async def send_quick_combo_upsell(sender, lang="en"):
     session = get_session(sender)
@@ -2202,10 +2233,16 @@ async def send_text_message(to, message):
     url = f"https://graph.facebook.com/v18.0/{WHATSAPP_PHONE_NUMBER_ID}/messages"
     headers = {"Authorization": f"Bearer {WHATSAPP_TOKEN}", "Content-Type": "application/json"}
     payload = {"messaging_product": "whatsapp", "to": to, "type": "text", "text": {"body": message}}
-    async with aiohttp.ClientSession() as s:
-        async with s.post(url, json=payload, headers=headers) as r:
-            _ = await r.text()
-            print(f"Text sent to {to}")
+    try:
+        async with aiohttp.ClientSession() as s:
+            async with s.post(url, json=payload, headers=headers) as r:
+                resp = await r.text()
+                if r.status >= 400:
+                    print(f"❌ send_text_message FAILED {r.status}: {resp[:500]}")
+                else:
+                    print(f"Text sent to {to}")
+    except Exception as e:
+        print(f"❌ send_text_message EXCEPTION: {e}")
 
 @app.post("/manager-update")
 async def manager_update(request: Request):
