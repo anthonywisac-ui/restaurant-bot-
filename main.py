@@ -824,11 +824,28 @@ def guess_category(text_lower):
     return None
 
 def is_order_status_query(text_lower):
-    # FIX #23 — narrower matching (removed vague "my order", "how long")
-    return any(w in text_lower for w in [
+    # EXPANDED: catch "how much time", "not arrived", "how long", "kab aayega" etc.
+    keywords = [
         "order status", "where is my order", "where's my order",
-        "wheres my order", "order update", "ready yet", "track my order"
-    ])
+        "wheres my order", "order update", "ready yet", "track my order",
+        "how much time", "how long will", "how long it", "how long does",
+        "not arrived", "not delivered", "not came", "didn't arrive", "didnt arrive",
+        "haven't received", "havent received", "where's my food", "wheres my food",
+        "where is my food", "where is my", "where's my",
+        "when will", "kitna time", "kab aayega", "kab aaega", "kahan hai",
+        "arrive", "arriving", "eta", "status of my",
+    ]
+    if any(w in text_lower for w in keywords):
+        return True
+    # Also catch explicit order number mentions: #12345, order 12345, my order #12345
+    if re.search(r'(order|#)\s*#?\s*\d{5}', text_lower):
+        return True
+    return False
+
+def extract_order_number(text):
+    """Extract 5-digit order number from customer text."""
+    m = re.search(r'\b(\d{5})\b', text or "")
+    return int(m.group(1)) if m else None
 
 def is_valid_name(text):
     # FIX #14
@@ -1472,39 +1489,172 @@ async def _handle_flow_inner(sender, text, is_button=False):
     await send_text_message(sender, reply)
 
 async def handle_order_status(sender, session, lang, text):
-    # FIX #24, #37 — text passed as param, use list lookup
-    order_id = session.get("order_id")
+    # Try to extract order number from customer's message first
+    order_id = extract_order_number(text)
 
-    order_match = re.search(r'\b(\d{5})\b', text or "")
-    if order_match:
-        order_id = int(order_match.group(1))
-
+    # Then fall back to session / lookup
     if not order_id:
-        # FIX #22 — list-based lookup, most recent
+        order_id = session.get("order_id")
+    if not order_id:
         orders_list = customer_order_lookup.get(sender, [])
         if orders_list:
             order_id = orders_list[-1]
 
     if not order_id:
-        await send_text_message(sender, "I don't see an active order for you. Type *menu* to place a new order! 😊")
+        await send_text_message(
+            sender,
+            "I don't see an active order for you. Type *menu* to place a new order! 😊"
+        )
         return
 
     order_data = saved_orders.get(order_id)
+    customer_name = (order_data or {}).get("customer_name", "")
+    greet = f"Hi {customer_name}! " if customer_name else ""
+
     if not order_data:
-        await send_text_message(sender, f"Let me check on order #{order_id} for you! 🔍")
-        await notify_manager_status(order_id, sender)
+        # Order number given but we don't have data — still reassure + escalate
+        await send_text_message(
+            sender,
+            f"{greet}Let me check on order #{order_id} with our team right away! 🔍\n\n"
+            f"I'll get back to you in a moment. Thank you for your patience! 🙏"
+        )
+        await notify_manager_status(order_id, sender, reason="Data missing")
         return
 
-    elapsed = (time.time() - order_data["timestamp"]) / 60
+    elapsed_min = (time.time() - order_data["timestamp"]) / 60
     delivery_type = order_data.get("delivery_type", "pickup")
-    expected = 45 if delivery_type == "delivery" else 20
+    expected_max = 45 if delivery_type == "delivery" else 20
+    expected_min = 30 if delivery_type == "delivery" else 15
 
-    if elapsed < expected:
-        remaining = int(expected - elapsed)
-        await send_text_message(sender, f"🍳 Your order #{order_id} is being prepared!\n\n⏱️ About {remaining} more minutes.\n\nHang tight! 😊")
+    elapsed_int = int(elapsed_min)
+
+    # Case 1: Within expected time range — reassure with accurate ETA
+    if elapsed_min < expected_min:
+        remaining = expected_min - elapsed_int
+        msg = (
+            f"{greet}Your order #{order_id} is being prepared! 🍳\n\n"
+            f"⏱️ *Expected in about {remaining}-{expected_max - elapsed_int} more minutes*\n\n"
+            f"Our kitchen is working on it right now. Thanks for your patience! 😊"
+        )
+        await send_text_message(sender, msg)
+        return
+
+    # Case 2: Between min and max — approaching delivery
+    if elapsed_min < expected_max:
+        remaining = expected_max - elapsed_int
+        if delivery_type == "delivery":
+            msg = (
+                f"{greet}Your order #{order_id} should be arriving any moment now! 🚚\n\n"
+                f"⏱️ *Around {max(1, remaining)} more minutes* to reach you.\n\n"
+                f"If it doesn't arrive soon, I'll check with the driver. Almost there! 😊"
+            )
+        else:
+            msg = (
+                f"{greet}Your order #{order_id} should be ready any moment! 🏪\n\n"
+                f"⏱️ *Around {max(1, remaining)} more minutes*.\n\n"
+                f"Feel free to head over — we'll have it hot and ready! 😊"
+            )
+        await send_text_message(sender, msg)
+        return
+
+    # Case 3: OVERDUE — apologize, reassure, escalate to manager urgently
+    delay = elapsed_int - expected_max
+    if delivery_type == "delivery":
+        msg = (
+            f"{greet}I'm really sorry your order #{order_id} hasn't arrived yet! 🙏\n\n"
+            f"⏱️ It's been *{elapsed_int} minutes* — about {delay} mins longer than expected.\n\n"
+            f"I'm reaching out to our team right now to check on the driver. "
+            f"You'll have an update in the next few minutes. Thank you for your patience! 💚"
+        )
     else:
-        await send_text_message(sender, f"🔍 Checking on your order #{order_id} with our team... I'll update you shortly! 😊")
-        await notify_manager_status(order_id, sender)
+        msg = (
+            f"{greet}Sorry for the wait on order #{order_id}! 🙏\n\n"
+            f"⏱️ It's been *{elapsed_int} minutes* — about {delay} mins longer than expected.\n\n"
+            f"Let me check with the kitchen right now. I'll update you shortly! 💚"
+        )
+    await send_text_message(sender, msg)
+    await notify_manager_status(order_id, sender, reason=f"OVERDUE by {delay} mins — customer waiting")
+
+async def send_manager_action_list(order_id, customer_number, header_text, body_text, footer_text="Tap action to update customer"):
+    """Send interactive list message to manager with one-tap status actions."""
+    url = f"https://graph.facebook.com/v18.0/{WHATSAPP_PHONE_NUMBER_ID}/messages"
+    headers = {"Authorization": f"Bearer {WHATSAPP_TOKEN}", "Content-Type": "application/json"}
+
+    # WhatsApp limits: header ≤ 60 chars, body ≤ 1024 chars, footer ≤ 60 chars
+    if len(body_text) > 1000:
+        body_text = body_text[:997] + "…"
+    if len(header_text) > 60:
+        header_text = header_text[:59] + "…"
+    if len(footer_text) > 60:
+        footer_text = footer_text[:59] + "…"
+
+    # IDs encode action so ai-agent can parse and forward to /manager-update
+    rows = [
+        {
+            "id": f"MGR_{order_id}_READY",
+            "title": "✅ Ready",
+            "description": "Food is ready (pickup) / out for delivery"
+        },
+        {
+            "id": f"MGR_{order_id}_OUTFORDELIVERY",
+            "title": "🚚 Out for Delivery",
+            "description": "Driver on the way to customer"
+        },
+        {
+            "id": f"MGR_{order_id}_DELAYED15",
+            "title": "⏱️ Delayed 15 min",
+            "description": "Needs 15 more minutes"
+        },
+        {
+            "id": f"MGR_{order_id}_DELAYED30",
+            "title": "⏱️ Delayed 30 min",
+            "description": "Needs 30 more minutes"
+        },
+        {
+            "id": f"MGR_{order_id}_CANCELLED",
+            "title": "❌ Cancelled",
+            "description": "Cancel this order"
+        },
+    ]
+
+    payload = {
+        "messaging_product": "whatsapp",
+        "to": MANAGER_NUMBER,
+        "type": "interactive",
+        "interactive": {
+            "type": "list",
+            "header": {"type": "text", "text": header_text},
+            "body": {"text": body_text},
+            "footer": {"text": footer_text},
+            "action": {
+                "button": "Update Status",
+                "sections": [{
+                    "title": f"Order #{order_id}",
+                    "rows": rows
+                }]
+            }
+        }
+    }
+    try:
+        async with aiohttp.ClientSession() as s:
+            async with s.post(url, json=payload, headers=headers) as r:
+                resp = await r.text()
+                if r.status >= 400:
+                    print(f"❌ Manager list send FAILED {r.status}: {resp[:500]}")
+                    # Fallback — send plain text with typed commands so manager isn't stuck
+                    fallback = (
+                        f"{body_text}\n\n"
+                        f"Reply with:\n"
+                        f"ORDER#{order_id} READY\n"
+                        f"ORDER#{order_id} OUT FOR DELIVERY\n"
+                        f"ORDER#{order_id} DELAYED 15\n"
+                        f"ORDER#{order_id} CANCELLED"
+                    )
+                    await send_whatsapp_to_number(MANAGER_NUMBER, fallback)
+                else:
+                    print(f"Manager interactive list sent for #{order_id}")
+    except Exception as e:
+        print(f"❌ Manager list exception: {e}")
 
 async def notify_manager(customer_number, session, order_id):
     order = session.get("order", {})
@@ -1515,35 +1665,65 @@ async def notify_manager(customer_number, session, order_id):
     order_text = get_order_text(order)
     lang_name = LANG_NAMES.get(session.get("lang", "en"), "English")
 
-    msg = f"""🔔 *NEW ORDER #{order_id}*
-
-👤 {session.get('name', 'N/A')}
-📱 +{customer_number}
-🌐 Language: {lang_name}
-
-{order_text}
-
-Subtotal: ${total:.2f}
-Tax: ${tax:.2f}
-Delivery: ${delivery_charge:.2f}
-*Total: ${grand_total:.2f}*
-
-{'Delivery: ' + session.get('address', '') if session.get('delivery_type') == 'delivery' else 'Pickup'}
-Payment: {session.get('payment', 'N/A')}
-ETA: {'30-45 mins' if session.get('delivery_type') == 'delivery' else '15-20 mins'}"""
-
-    reply_guide = (
-        f"\n\nTo update customer, reply:\n"
-        f"ORDER#{order_id} READY\n"
-        f"ORDER#{order_id} OUT FOR DELIVERY\n"
-        f"ORDER#{order_id} DELAYED 15\n"
-        f"ORDER#{order_id} CANCELLED"
+    location_line = (
+        f"📍 Delivery: {session.get('address', '')}"
+        if session.get("delivery_type") == "delivery"
+        else "🏪 Pickup"
     )
-    await send_whatsapp_to_number(MANAGER_NUMBER, msg + reply_guide)
+    eta_line = "30-45 mins" if session.get("delivery_type") == "delivery" else "15-20 mins"
+
+    body_text = (
+        f"🔔 *NEW ORDER #{order_id}*\n\n"
+        f"👤 {session.get('name', 'N/A')}\n"
+        f"📱 +{customer_number}\n"
+        f"🌐 {lang_name}\n\n"
+        f"{order_text}\n\n"
+        f"Subtotal: ${total:.2f}\n"
+        f"Tax: ${tax:.2f}\n"
+        f"Delivery: ${delivery_charge:.2f}\n"
+        f"*Total: ${grand_total:.2f}*\n\n"
+        f"{location_line}\n"
+        f"💳 {session.get('payment', 'N/A')}\n"
+        f"⏱️ ETA: {eta_line}"
+    )
+
+    await send_manager_action_list(
+        order_id=order_id,
+        customer_number=customer_number,
+        header_text=f"🔔 New Order #{order_id}",
+        body_text=body_text,
+        footer_text="Tap Update Status when ready"
+    )
     print(f"Manager notified: #{order_id}")
 
-async def notify_manager_status(order_id, customer_number):
-    await send_whatsapp_to_number(MANAGER_NUMBER, f"⚠️ Customer +{customer_number} asking about Order #{order_id}. Please update!")
+async def notify_manager_status(order_id, customer_number, reason="Customer inquiry"):
+    order_data = saved_orders.get(order_id, {})
+    customer_name = order_data.get("customer_name", "Customer")
+    delivery_type = order_data.get("delivery_type", "pickup")
+    address = order_data.get("address", "")
+    elapsed_min = 0
+    if order_data.get("timestamp"):
+        elapsed_min = int((time.time() - order_data["timestamp"]) / 60)
+
+    location_line = f"📍 {address}" if address and delivery_type == "delivery" else "🏪 Pickup"
+
+    body_text = (
+        f"⚠️ *CUSTOMER WAITING — #{order_id}*\n\n"
+        f"👤 {customer_name}\n"
+        f"📱 +{customer_number}\n"
+        f"⏱️ Placed *{elapsed_min} min ago*\n"
+        f"🚚 {delivery_type.title()}\n"
+        f"{location_line}\n\n"
+        f"📢 {reason}"
+    )
+
+    await send_manager_action_list(
+        order_id=order_id,
+        customer_number=customer_number,
+        header_text=f"⚠️ Waiting — #{order_id}",
+        body_text=body_text,
+        footer_text="Tap to update customer now"
+    )
 
 # FIX #25 — handle_manager_reply REMOVED. Manager replies live only in ai-agent.
 
@@ -2270,9 +2450,10 @@ async def manager_update(request: Request):
         elif "OUT FOR DELIVERY" in status or "ON THE WAY" in status:
             msg = f"Hey {customer_name}! Your order #{order_id} is *on the way!* Should arrive in 15-20 minutes!"
         elif "DELAYED" in status:
-            delay_match = re.search(r'DELAYED\s+(\d+)', status)
+            # Support both "DELAYED 15" (typed) and "DELAYED15" (button id)
+            delay_match = re.search(r'DELAYED\s*(\d+)', status)
             delay_time = delay_match.group(1) + " minutes" if delay_match else "a little longer"
-            msg = f"Hi {customer_name}, your order #{order_id} will take *{delay_time}* more than expected. Sorry for the wait!"
+            msg = f"Hi {customer_name}, your order #{order_id} will take *{delay_time}* more than expected. Sorry for the wait! 🙏"
         elif "CANCELLED" in status:
             msg = f"Hi {customer_name}, unfortunately order #{order_id} has been *cancelled*. Please contact us for a refund."
         else:
@@ -2280,6 +2461,24 @@ async def manager_update(request: Request):
 
         await send_whatsapp_to_number(str(customer_number), msg)
         print(f"Customer {customer_number} updated for order #{order_id}")
+
+        # Send confirmation back to manager so they know the tap was received
+        try:
+            status_label = status
+            if "READY" in status and "DELIVERY" not in status:
+                status_label = "READY"
+            elif "OUT FOR DELIVERY" in status:
+                status_label = "OUT FOR DELIVERY"
+            elif "DELAYED" in status:
+                m = re.search(r'DELAYED\s*(\d+)', status)
+                status_label = f"DELAYED {m.group(1)} min" if m else "DELAYED"
+            elif "CANCELLED" in status:
+                status_label = "CANCELLED"
+            confirm_msg = f"✅ Order #{order_id} marked as *{status_label}*\n\nCustomer {customer_name} has been notified."
+            await send_whatsapp_to_number(MANAGER_NUMBER, confirm_msg)
+        except Exception as e:
+            print(f"Manager confirmation send failed: {e}")
+
         return {"status": "ok"}
     except Exception as e:
         print(f"Manager update error: {e}")
