@@ -1254,7 +1254,7 @@ async def send_main_menu(sender, current_order=None, lang="en"):
         "messaging_product": "whatsapp", "to": sender, "type": "interactive",
         "interactive": {
             "type": "list",
-            "header": {"type": "image", "image": {"link": IMAGES["banner"]}},
+            "header": {"type": "text", "text": "🍽️ Wild Bites Restaurant"},
             "body": {"text": f"{t(lang, 'menu_header')}\n{t(lang, 'craving')}{cart_text}"},
             "footer": {"text": "Fast Delivery | Fresh Food | Best Value"},
             "action": {
@@ -1299,12 +1299,11 @@ async def send_category_items(sender, cat_key, current_order, lang="en"):
 
     url = f"https://graph.facebook.com/v18.0/{WHATSAPP_PHONE_NUMBER_ID}/messages"
     headers = {"Authorization": f"Bearer {WHATSAPP_TOKEN}", "Content-Type": "application/json"}
-    cat_img = IMAGES.get(cat_key, IMAGES["banner"])
     payload = {
         "messaging_product": "whatsapp", "to": sender, "type": "interactive",
         "interactive": {
             "type": "list",
-            "header": {"type": "image", "image": {"link": cat_img}},
+            "header": {"type": "text", "text": cat["name"]},
             "body": {"text": f"{cat['name']}\n{t(lang, 'tap_add')}{cart_text}"},
             "footer": {"text": "Tap to add to cart"},
             "action": {"button": "Select Item", "sections": [{"title": cat["name"], "rows": rows}]}
@@ -1327,7 +1326,7 @@ async def send_qty_control(sender, item_id, item, order, lang="en"):
         "messaging_product": "whatsapp", "to": sender, "type": "interactive",
         "interactive": {
             "type": "button",
-            "header": {"type": "image", "image": {"link": IMAGES.get(item_id, IMAGES["fastfood"])}},
+            "header": {"type": "text", "text": f"{item['emoji']} {item['name']}"},
             "body": {"text": f"*{item['name']}*\nQty: {qty} x ${item['price']:.2f} = *${subtotal:.2f}*\n\n{t(lang, 'your_order')}\n{order_text}\n\n{t(lang, 'total')} ${total:.2f}*"},
             "footer": {"text": "Wild Bites Restaurant"},
             "action": {"buttons": [
@@ -1411,7 +1410,7 @@ async def send_dessert_upsell(sender, order, lang="en"):
         "messaging_product": "whatsapp", "to": sender, "type": "interactive",
         "interactive": {
             "type": "button",
-            "header": {"type": "image", "image": {"link": IMAGES["desserts"]}},
+            "header": {"type": "text", "text": "🍽️ Wild Bites Restaurant"},
             "body": {"text": f"{t(lang, 'save_room')}\nOrder: ${total:.2f}\n\n🍫 Lava Cake $6.99 | 🍰 Cheesecake $5.99 | 🍨 Brownie Sundae $6.99"},
             "footer": {"text": "Wild Bites Restaurant"},
             "action": {"buttons": [
@@ -1436,7 +1435,7 @@ async def send_cart_view(sender, order, lang="en"):
         "messaging_product": "whatsapp", "to": sender, "type": "interactive",
         "interactive": {
             "type": "button",
-            "header": {"type": "image", "image": {"link": IMAGES["order_confirm"]}},
+            "header": {"type": "text", "text": "🍽️ Wild Bites Restaurant"},
             "body": {"text": f"{order_text}\n\n{t(lang, 'subtotal')} ${total:.2f}"},
             "footer": {"text": "Wild Bites Restaurant"},
             "action": {"buttons": [
@@ -1461,7 +1460,7 @@ async def send_order_summary(sender, order, lang="en"):
         "messaging_product": "whatsapp", "to": sender, "type": "interactive",
         "interactive": {
             "type": "button",
-            "header": {"type": "image", "image": {"link": IMAGES["order_confirm"]}},
+            "header": {"type": "text", "text": "🍽️ Wild Bites Restaurant"},
             "body": {"text": f"{order_text}\n\n{t(lang, 'subtotal')} ${total:.2f}\n{t(lang, 'tax')} ${tax:.2f}\n{t(lang, 'grand_total')} ${grand_total:.2f}*"},
             "footer": {"text": "Wild Bites Restaurant"},
             "action": {"buttons": [
@@ -1482,7 +1481,7 @@ async def send_delivery_buttons(sender, name, lang="en"):
         "messaging_product": "whatsapp", "to": sender, "type": "interactive",
         "interactive": {
             "type": "button",
-            "header": {"type": "image", "image": {"link": IMAGES["delivery"]}},
+            "header": {"type": "text", "text": "🍽️ Wild Bites Restaurant"},
             "body": {"text": f"Hey {name}! Delivery or Pickup?\n\n{t(lang, 'delivery_info')}"},
             "footer": {"text": "Wild Bites Restaurant"},
             "action": {"buttons": [
@@ -1568,7 +1567,7 @@ async def send_returning_customer_menu(sender, name, fav_text, lang="en"):
         "messaging_product": "whatsapp", "to": sender, "type": "interactive",
         "interactive": {
             "type": "button",
-            "header": {"type": "image", "image": {"link": IMAGES["welcome_back"]}},
+            "header": {"type": "text", "text": "🍽️ Wild Bites Restaurant"},
             "body": {"text": f"Welcome back, {name}! Great to see you again!{fav_text}\n\nWhat would you like to do today?"},
             "footer": {"text": "Wild Bites Restaurant"},
             "action": {"buttons": [
@@ -1614,6 +1613,48 @@ async def send_text_message(to, message):
         async with s.post(url, json=payload, headers=headers) as r:
             _ = await r.text()
             print(f"Text sent to {to}")
+
+@app.post("/manager-update")
+async def manager_update(request: Request):
+    """Receive manager order status updates from AI agent"""
+    data = await request.json()
+    order_id_str = str(data.get("order_id", ""))
+    status = data.get("status", "").upper()
+    print(f"Manager update: Order #{order_id_str} -> {status}")
+
+    try:
+        order_id = int(order_id_str)
+        customer_number = manager_pending.get(order_id)
+        if not customer_number:
+            print(f"No customer for order #{order_id}")
+            return {"status": "not_found"}
+
+        order_data = saved_orders.get(order_id, {})
+        customer_name = order_data.get("customer_name", "Customer")
+        import re as _re
+
+        if "READY" in status and "DELIVERY" not in status:
+            if order_data.get("delivery_type") == "pickup":
+                msg = f"Great news, {customer_name}! Your order #{order_id} is *READY for pickup!* Please come collect it"
+            else:
+                msg = f"Great news, {customer_name}! Your order #{order_id} is ready and *OUT FOR DELIVERY* Should arrive in 15-20 minutes!"
+        elif "OUT FOR DELIVERY" in status or "ON THE WAY" in status:
+            msg = f"Hey {customer_name}! Your order #{order_id} is *on the way!* Should arrive in 15-20 minutes!"
+        elif "DELAYED" in status:
+            delay_match = _re.search(r'DELAYED\s+(\d+)', status)
+            delay_time = delay_match.group(1) + " minutes" if delay_match else "a little longer"
+            msg = f"Hi {customer_name}, your order #{order_id} will take *{delay_time}* more than expected. Sorry for the wait!"
+        elif "CANCELLED" in status:
+            msg = f"Hi {customer_name}, unfortunately order #{order_id} has been *cancelled*. Please contact us for a refund."
+        else:
+            msg = f"Update on your order #{order_id}: {status}"
+
+        await send_whatsapp_to_number(str(customer_number), msg)
+        print(f"Customer {customer_number} updated for order #{order_id}")
+        return {"status": "ok"}
+    except Exception as e:
+        print(f"Manager update error: {e}")
+        return {"status": "error"}
 
 @app.post("/twilio-call")
 async def twilio_call(request: Request):
