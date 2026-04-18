@@ -554,6 +554,78 @@ UPSELL_COMBOS = {
     "PZ1": ["SD4", "DR6"], "PZ3": ["SD4", "DR1"], "FS1": ["DR1"],
 }
 
+# ── FOOD IMAGES (Imgur hosted — replace with your own!) ─────────────
+IMAGES = {
+    # Restaurant banner
+    "banner": "https://images.unsplash.com/photo-1517248135467-4c7edcad34c4?w=800&q=80",
+
+    # Category images
+    "deals":    "https://images.unsplash.com/photo-1568901346375-23c9450c58cd?w=800&q=80",
+    "fastfood": "https://images.unsplash.com/photo-1551782450-a2132b4ba21d?w=800&q=80",
+    "pizza":    "https://images.unsplash.com/photo-1565299624946-b28f40a0ae38?w=800&q=80",
+    "bbq":      "https://images.unsplash.com/photo-1544025162-d76538b2a681?w=800&q=80",
+    "fish":     "https://images.unsplash.com/photo-1519708227418-c8fd9a32b7a2?w=800&q=80",
+    "sides":    "https://images.unsplash.com/photo-1576107232684-1279f390859f?w=800&q=80",
+    "drinks":   "https://images.unsplash.com/photo-1544145945-f90425340c7e?w=800&q=80",
+    "desserts": "https://images.unsplash.com/photo-1563805042-7684c019e1cb?w=800&q=80",
+
+    # Item images — Burgers
+    "FF1": "https://images.unsplash.com/photo-1568901346375-23c9450c58cd?w=800&q=80",
+    "FF2": "https://images.unsplash.com/photo-1562967914-608f82629710?w=800&q=80",
+    "FF3": "https://images.unsplash.com/photo-1553979459-d2229ba7433b?w=800&q=80",
+    "FF4": "https://images.unsplash.com/photo-1520072959219-c595dc870360?w=800&q=80",
+    "FF5": "https://images.unsplash.com/photo-1594212699903-ec8a3eca50f5?w=800&q=80",
+
+    # Item images — Pizza
+    "PZ1": "https://images.unsplash.com/photo-1574071318508-1cdbab80d002?w=800&q=80",
+    "PZ2": "https://images.unsplash.com/photo-1565299507177-b0ac66763828?w=800&q=80",
+    "PZ3": "https://images.unsplash.com/photo-1534308983496-4fabb1a015ee?w=800&q=80",
+    "PZ4": "https://images.unsplash.com/photo-1571407970349-bc81e7e96d47?w=800&q=80",
+    "PZ5": "https://images.unsplash.com/photo-1513104890138-7c749659a591?w=800&q=80",
+
+    # Item images — BBQ
+    "BB1": "https://images.unsplash.com/photo-1544025162-d76538b2a681?w=800&q=80",
+    "BB2": "https://images.unsplash.com/photo-1529193591184-b1d58069ecdd?w=800&q=80",
+    "BB3": "https://images.unsplash.com/photo-1621852004158-f3bc188ace2d?w=800&q=80",
+    "BB4": "https://images.unsplash.com/photo-1558030137-a56c1b004fa3?w=800&q=80",
+    "BB5": "https://images.unsplash.com/photo-1567620832903-9fc6debc209f?w=800&q=80",
+
+    # Item images — Fish
+    "FS1": "https://images.unsplash.com/photo-1519708227418-c8fd9a32b7a2?w=800&q=80",
+    "FS2": "https://images.unsplash.com/photo-1467003909585-2f8a72700288?w=800&q=80",
+    "FS3": "https://images.unsplash.com/photo-1565680018434-b513d5e5fd47?w=800&q=80",
+    "FS4": "https://images.unsplash.com/photo-1551782450-17144efb9c50?w=800&q=80",
+
+    # Item images — Sides
+    "SD1": "https://images.unsplash.com/photo-1576107232684-1279f390859f?w=800&q=80",
+    "SD2": "https://images.unsplash.com/photo-1639024471283-03518883512d?w=800&q=80",
+    "SD3": "https://images.unsplash.com/photo-1473093295043-cdd812d0e601?w=800&q=80",
+    "SD4": "https://images.unsplash.com/photo-1527477396000-e27163b481c2?w=800&q=80",
+    "SD5": "https://images.unsplash.com/photo-1548811591-e280de0cce14?w=800&q=80",
+    "SD6": "https://images.unsplash.com/photo-1512621776951-a57141f2eefd?w=800&q=80",
+
+    # Item images — Drinks
+    "DR1": "https://images.unsplash.com/photo-1554866585-cd94860890b7?w=800&q=80",
+    "DR2": "https://images.unsplash.com/photo-1553361371-9b22f78e8b1d?w=800&q=80",
+    "DR3": "https://images.unsplash.com/photo-1621506289937-a8e4df240d0b?w=800&q=80",
+    "DR4": "https://images.unsplash.com/photo-1571068316344-75bc76f77890?w=800&q=80",
+    "DR5": "https://images.unsplash.com/photo-1553361371-9b22f78e8b1d?w=800&q=80",
+    "DR6": "https://images.unsplash.com/photo-1513558161293-cdaf765ed2fd?w=800&q=80",
+    "DR7": "https://images.unsplash.com/photo-1461023058943-07fcbe16d735?w=800&q=80",
+    "DR8": "https://images.unsplash.com/photo-1548036328-c9fa89d128fa?w=800&q=80",
+
+    # Item images — Desserts
+    "DS1": "https://images.unsplash.com/photo-1563805042-7684c019e1cb?w=800&q=80",
+    "DS2": "https://images.unsplash.com/photo-1567171466295-4afa63d45416?w=800&q=80",
+    "DS3": "https://images.unsplash.com/photo-1572490122747-3968b75cc699?w=800&q=80",
+    "DS4": "https://images.unsplash.com/photo-1606313564200-e75d5e30476c?w=800&q=80",
+
+    # Other screens
+    "order_confirm": "https://images.unsplash.com/photo-1414235077428-338989a2e8c0?w=800&q=80",
+    "delivery":      "https://images.unsplash.com/photo-1587745416684-47953f16f02f?w=800&q=80",
+    "welcome_back":  "https://images.unsplash.com/photo-1504674900247-0877df9cc836?w=800&q=80",
+}
+
 MENU_SUMMARY = """
 Wild Bites Restaurant Menu (US):
 Deals, Burgers, Pizza, BBQ, Fish, Drinks, Sides, Desserts
@@ -1182,8 +1254,8 @@ async def send_main_menu(sender, current_order=None, lang="en"):
         "messaging_product": "whatsapp", "to": sender, "type": "interactive",
         "interactive": {
             "type": "list",
-            "header": {"type": "text", "text": t(lang, "menu_header")},
-            "body": {"text": f"{t(lang, 'craving')}{cart_text}"},
+            "header": {"type": "image", "image": {"link": IMAGES["banner"]}},
+            "body": {"text": f"{t(lang, 'menu_header')}\n{t(lang, 'craving')}{cart_text}"},
             "footer": {"text": "Fast Delivery | Fresh Food | Best Value"},
             "action": {
                 "button": t(lang, "browse"),
@@ -1227,12 +1299,13 @@ async def send_category_items(sender, cat_key, current_order, lang="en"):
 
     url = f"https://graph.facebook.com/v18.0/{WHATSAPP_PHONE_NUMBER_ID}/messages"
     headers = {"Authorization": f"Bearer {WHATSAPP_TOKEN}", "Content-Type": "application/json"}
+    cat_img = IMAGES.get(cat_key, IMAGES["banner"])
     payload = {
         "messaging_product": "whatsapp", "to": sender, "type": "interactive",
         "interactive": {
             "type": "list",
-            "header": {"type": "text", "text": cat["name"]},
-            "body": {"text": f"{t(lang, 'tap_add')}{cart_text}"},
+            "header": {"type": "image", "image": {"link": cat_img}},
+            "body": {"text": f"{cat['name']}\n{t(lang, 'tap_add')}{cart_text}"},
             "footer": {"text": "Tap to add to cart"},
             "action": {"button": "Select Item", "sections": [{"title": cat["name"], "rows": rows}]}
         }
@@ -1254,7 +1327,7 @@ async def send_qty_control(sender, item_id, item, order, lang="en"):
         "messaging_product": "whatsapp", "to": sender, "type": "interactive",
         "interactive": {
             "type": "button",
-            "header": {"type": "text", "text": f"{t(lang, 'added')} {item['emoji']}"},
+            "header": {"type": "image", "image": {"link": IMAGES.get(item_id, IMAGES["fastfood"])}},
             "body": {"text": f"*{item['name']}*\nQty: {qty} x ${item['price']:.2f} = *${subtotal:.2f}*\n\n{t(lang, 'your_order')}\n{order_text}\n\n{t(lang, 'total')} ${total:.2f}*"},
             "footer": {"text": "Wild Bites Restaurant"},
             "action": {"buttons": [
@@ -1338,8 +1411,8 @@ async def send_dessert_upsell(sender, order, lang="en"):
         "messaging_product": "whatsapp", "to": sender, "type": "interactive",
         "interactive": {
             "type": "button",
-            "header": {"type": "text", "text": t(lang, "save_room")},
-            "body": {"text": f"Order: ${total:.2f}\n\nLava Cake $6.99 | Cheesecake $5.99 | Brownie Sundae $6.99"},
+            "header": {"type": "image", "image": {"link": IMAGES["desserts"]}},
+            "body": {"text": f"{t(lang, 'save_room')}\nOrder: ${total:.2f}\n\n🍫 Lava Cake $6.99 | 🍰 Cheesecake $5.99 | 🍨 Brownie Sundae $6.99"},
             "footer": {"text": "Wild Bites Restaurant"},
             "action": {"buttons": [
                 {"type": "reply", "reply": {"id": "YES_UPSELL", "title": t(lang, "yes_dessert")}},
@@ -1363,7 +1436,7 @@ async def send_cart_view(sender, order, lang="en"):
         "messaging_product": "whatsapp", "to": sender, "type": "interactive",
         "interactive": {
             "type": "button",
-            "header": {"type": "text", "text": "Your Cart"},
+            "header": {"type": "image", "image": {"link": IMAGES["order_confirm"]}},
             "body": {"text": f"{order_text}\n\n{t(lang, 'subtotal')} ${total:.2f}"},
             "footer": {"text": "Wild Bites Restaurant"},
             "action": {"buttons": [
@@ -1388,7 +1461,7 @@ async def send_order_summary(sender, order, lang="en"):
         "messaging_product": "whatsapp", "to": sender, "type": "interactive",
         "interactive": {
             "type": "button",
-            "header": {"type": "text", "text": t(lang, "order_summary")},
+            "header": {"type": "image", "image": {"link": IMAGES["order_confirm"]}},
             "body": {"text": f"{order_text}\n\n{t(lang, 'subtotal')} ${total:.2f}\n{t(lang, 'tax')} ${tax:.2f}\n{t(lang, 'grand_total')} ${grand_total:.2f}*"},
             "footer": {"text": "Wild Bites Restaurant"},
             "action": {"buttons": [
@@ -1409,8 +1482,8 @@ async def send_delivery_buttons(sender, name, lang="en"):
         "messaging_product": "whatsapp", "to": sender, "type": "interactive",
         "interactive": {
             "type": "button",
-            "header": {"type": "text", "text": f"Hey {name}! Delivery or Pickup?"},
-            "body": {"text": t(lang, "delivery_info")},
+            "header": {"type": "image", "image": {"link": IMAGES["delivery"]}},
+            "body": {"text": f"Hey {name}! Delivery or Pickup?\n\n{t(lang, 'delivery_info')}"},
             "footer": {"text": "Wild Bites Restaurant"},
             "action": {"buttons": [
                 {"type": "reply", "reply": {"id": "DELIVERY", "title": t(lang, "delivery")}},
@@ -1495,8 +1568,8 @@ async def send_returning_customer_menu(sender, name, fav_text, lang="en"):
         "messaging_product": "whatsapp", "to": sender, "type": "interactive",
         "interactive": {
             "type": "button",
-            "header": {"type": "text", "text": f"Welcome back, {name}!"},
-            "body": {"text": f"Great to see you again! What would you like to do today?{fav_text}"},
+            "header": {"type": "image", "image": {"link": IMAGES["welcome_back"]}},
+            "body": {"text": f"Welcome back, {name}! Great to see you again!{fav_text}\n\nWhat would you like to do today?"},
             "footer": {"text": "Wild Bites Restaurant"},
             "action": {"buttons": [
                 {"type": "reply", "reply": {"id": "REPEAT_ORDER", "title": "Repeat Last Order"}},
