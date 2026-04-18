@@ -4,6 +4,7 @@ import aiohttp
 import traceback
 import random
 import time
+import datetime
 from dotenv import load_dotenv
 from fastapi import FastAPI, Request
 from fastapi.responses import PlainTextResponse, HTMLResponse
@@ -576,6 +577,10 @@ customer_order_lookup = {}  # FIX #22 — now list of order_ids per customer
 manager_pending = {}
 customer_profiles = {}
 
+# ── RESERVATION STORE ────────────────────────────────────────
+reservations = {}
+reservation_counter = [2000]  # mutable so nested functions can increment
+
 def new_session(sender=None):
     profile = customer_profiles.get(sender, {}) if sender else {}
     is_returning = bool(profile.get("name"))
@@ -595,6 +600,9 @@ def new_session(sender=None):
         "order_id": None,
         "deal_context": None,  # FIX #3
         "post_order_at": 0,  # FIX #20
+        "dine_in": False,       # QR table order
+        "table": None,          # table number from QR
+        "reserve_data": {},     # reservation in progress
         # REMOVED: pending_combo (FIX #38), delay_warned (FIX #36), _last_text (FIX #37)
     }
 
@@ -947,6 +955,41 @@ async def _handle_flow_inner(sender, text, is_button=False):
     lang = session.get("lang", "en")
     text_lower = text.lower().strip()
 
+    # ── QR TABLE DETECTION ───────────────────────────────────────
+    # QR message format: "Hi, I am at Table 5 and would like to order."
+    if not is_button and not session.get("table"):
+        qr_match = re.search(r"\bi\s+am\s+at\s+table\s+(\d+)", text_lower)
+        if qr_match:
+            table_num = qr_match.group(1)
+            session["table"] = table_num
+            session["dine_in"] = True
+            session["delivery_type"] = "dine_in"
+            # If lang not selected yet, set English and go straight to menu
+            if stage == "lang_select":
+                session["lang"] = "en"
+                lang = "en"
+                session["stage"] = "menu"
+            table_welcome = "Welcome to Wild Bites! You are at *Table " + table_num + "* \n\nYour order will be brought right to your table. What would you like today?"
+            await send_text_message(sender, table_welcome)
+            await send_main_menu(sender, session["order"], lang)
+            return
+
+    # ── RESERVATION FLOW ─────────────────────────────────────────
+    reserve_triggers = ["reserve", "/reserve", "book table", "book a table",
+                        "reservation", "table booking", "reserve a table",
+                        "i want to book", "book for", "make a reservation"]
+    if not is_button and any(text_lower.startswith(t) or text_lower == t for t in reserve_triggers):
+        session["reserve_data"] = {}
+        session["stage"] = "reserve_date"
+        await send_reservation_date_picker(sender, lang)
+        return
+
+    # Reservation stage handler
+    if stage.startswith("reserve_"):
+        handled = await handle_reservation_stage(sender, text, is_button, session, lang)
+        if handled:
+            return
+
     # FIX #20 — post_order window: handle as order-related for 3 mins
     if stage == "post_order":
         elapsed = time.time() - session.get("post_order_at", 0)
@@ -971,9 +1014,12 @@ async def _handle_flow_inner(sender, text, is_button=False):
                 stage = session["stage"]
                 # fall through to normal flow
             else:
-                # unknown — AI reply only (no auto menu push)
-                reply = await get_ai_response(sender, text, lang, session)
-                await send_text_message(sender, reply)
+                # post_order: only respond if customer explicitly asks something
+                # Do NOT send unsolicited messages
+                tl = text_lower.strip()
+                if len(tl) > 2:  # ignore accidental taps / blank messages
+                    reply = await get_ai_response(sender, text, lang, session)
+                    await send_text_message(sender, reply)
                 return
 
     # Hard reset
@@ -1392,8 +1438,13 @@ async def _handle_flow_inner(sender, text, is_button=False):
         return
 
     # ── DELIVERY / PICKUP ────────────────────────────────
-    if text in ["DELIVERY", "PICKUP"]:
+    if text in ["DELIVERY", "PICKUP", "DINE_IN"]:
         total = get_order_total(session["order"])
+        if text == "DINE_IN" or session.get("dine_in"):
+            session["delivery_type"] = "dine_in"
+            session["stage"] = "payment"
+            await send_payment_buttons(sender, session.get("name", ""), lang)
+            return
         if text == "DELIVERY":
             if total < MIN_DELIVERY_ORDER:
                 # FIX #16 — give add-more option
@@ -1665,11 +1716,13 @@ async def notify_manager(customer_number, session, order_id):
     order_text = get_order_text(order)
     lang_name = LANG_NAMES.get(session.get("lang", "en"), "English")
 
-    location_line = (
-        f"📍 Delivery: {session.get('address', '')}"
-        if session.get("delivery_type") == "delivery"
-        else "🏪 Pickup"
-    )
+    dt = session.get("delivery_type", "pickup")
+    if dt == "dine_in":
+        location_line = f"🪑 Dine-in Table {session.get('table', '?')}"
+    elif dt == "delivery":
+        location_line = f"📍 Delivery: {session.get('address', '')}"
+    else:
+        location_line = "🏪 Pickup"
     eta_line = "30-45 mins" if session.get("delivery_type") == "delivery" else "15-20 mins"
 
     body_text = (
@@ -1757,6 +1810,7 @@ async def save_to_sheet(customer_number, session, order_id):
         "delivery_charge": round(delivery_charge, 2),
         "grand_total": round(grand_total, 2),
         "delivery_type": session.get("delivery_type", ""),
+        "table": session.get("table", ""),
         "address": session.get("address", ""),
         "payment": session.get("payment", ""),
         "language": session.get("lang", "en"),
@@ -1782,13 +1836,26 @@ async def save_to_sheet(customer_number, session, order_id):
 
 async def get_ai_response(sender, user_message, lang="en", session=None, extra_instruction=""):
     lang_name = LANG_NAMES.get(lang, "English")
-    system_prompt = f"""You are Alex, a friendly customer service rep at Wild Bites Restaurant.
-IMPORTANT: Always reply in {lang_name} only. Never mention you are AI.
-Be warm, casual, helpful. Max 3 sentences. Use emojis naturally.
-Hours: 10am-11pm. Delivery min $30 + $4.99 fee (free over $50). Pickup min $10.
+    # Build context about customer's current state
+    order_context = ""
+    if session:
+        if session.get("order"):
+            items = [f"{v['item']['name']} x{v['qty']}" for v in session["order"].values()]
+            order_context = f"\nCustomer's current cart: {', '.join(items)}"
+        if session.get("stage") == "post_order":
+            order_context += f"\nOrder #{session.get('order_id')} already placed. Do NOT ask them to order again."
+        if session.get("dine_in"):
+            order_context += f"\nCustomer is dining in at Table {session.get('table')}."
+
+    system_prompt = f"""You are Alex, a warm and friendly team member at Wild Bites Restaurant — not a bot.
+IMPORTANT: Always reply in {lang_name} only. Never say you are AI or a bot.
+Tone: casual, genuine, like a real person texting. Max 2-3 sentences. Use 1-2 emojis naturally.
+Hours: 10am-11pm. Delivery min $30 + $4.99 fee (free over $50). Pickup min $10. Dine-in also available.
 {MENU_SUMMARY}
+{order_context}
 {extra_instruction}
-If customer seems confused or stuck, guide them to next step clearly."""
+After order is placed: just be helpful and warm. Do NOT push them to order again unless they ask.
+If confused or stuck: guide them clearly to the next step."""
 
     # FIX #30 — include conversation history
     messages = [{"role": "system", "content": system_prompt}]
@@ -2409,6 +2476,271 @@ async def finalize_bbq_sides(sender, session, lang="en"):
         await send_text_message(sender, f"✅ Sides locked in: {', '.join(sides)}")
         await send_qty_control(sender, target_id, item, session["order"], lang)
 
+
+# ══════════════════════════════════════════════════════════════════
+# RESERVATION SYSTEM
+# ══════════════════════════════════════════════════════════════════
+
+async def handle_reservation_stage(sender, text, is_button, session, lang):
+    """Handle reservation flow stages. Returns True if handled."""
+    stage = session.get("stage", "")
+    res = session.setdefault("reserve_data", {})
+
+    if stage == "reserve_date":
+        # Could be a list_reply (date button) or typed
+        date_val = parse_res_date(text.strip())
+        if not date_val:
+            await send_text_message(sender,
+                "Please pick a date from the list, or type one like *25 Dec* or *tomorrow* 😊")
+            return True
+        res["date"] = date_val
+        session["stage"] = "reserve_time"
+        await send_reservation_time_picker(sender, lang)
+        return True
+
+    if stage == "reserve_time":
+        time_val = parse_res_time(text.strip())
+        if not time_val:
+            await send_text_message(sender,
+                "Please choose a time from the list, or type like *7pm* or *7:30 PM* 😊")
+            return True
+        res["time"] = time_val
+        session["stage"] = "reserve_guests"
+        await send_guest_picker(sender, lang)
+        return True
+
+    if stage == "reserve_guests":
+        guests = None
+        if text.startswith("GUEST_"):
+            guests = text.replace("GUEST_", "")
+        elif text.strip().isdigit() and 1 <= int(text.strip()) <= 20:
+            guests = text.strip()
+        if not guests:
+            await send_text_message(sender, "How many guests? Tap a button or type a number (1-20) 😊")
+            return True
+        res["guests"] = guests
+        session["stage"] = "reserve_name"
+        await send_text_message(sender,
+            f"Almost done! What name should we put the reservation under? 😊")
+        return True
+
+    if stage == "reserve_name":
+        name = text.strip()
+        if len(name) < 2 or re.match(r"^[A-Z_]+$", name):
+            await send_text_message(sender, "Please enter your name (first name is fine) 😊")
+            return True
+        res["name"] = name.title()
+        session["stage"] = "reserve_confirm"
+        await send_reservation_summary(sender, res, lang)
+        return True
+
+    if stage == "reserve_confirm":
+        if text in ["RES_CONFIRM", "YES", "yes"]:
+            await finalize_reservation(sender, session, lang)
+        elif text in ["RES_CANCEL", "NO", "no"]:
+            session["stage"] = "menu"
+            session["reserve_data"] = {}
+            await send_text_message(sender,
+                "No worries! Reservation cancelled. Type *reserve* anytime to book a table, "
+                "or *menu* to order food 😊")
+        else:
+            await send_reservation_summary(sender, res, lang)
+        return True
+
+    return False
+
+
+def parse_res_date(text):
+    today = datetime.date.today()
+    tl = text.lower().strip()
+    if tl in ["today"]:
+        return today.strftime("%A, %d %b %Y")
+    if tl in ["tomorrow", "tmr", "tmrw"]:
+        return (today + datetime.timedelta(days=1)).strftime("%A, %d %b %Y")
+    days = ["monday","tuesday","wednesday","thursday","friday","saturday","sunday"]
+    if tl in days:
+        diff = (days.index(tl) - today.weekday()) % 7 or 7
+        return (today + datetime.timedelta(days=diff)).strftime("%A, %d %b %Y")
+    for fmt in ["%d %b %Y", "%d %b", "%d %B", "%Y-%m-%d", "%d/%m/%Y"]:
+        try:
+            parsed = datetime.datetime.strptime(text, fmt)
+            if fmt in ["%d %b", "%d %B"]:
+                parsed = parsed.replace(year=today.year)
+                if parsed.date() < today:
+                    parsed = parsed.replace(year=today.year + 1)
+            return parsed.strftime("%A, %d %b %Y")
+        except Exception:
+            pass
+    return None
+
+
+def parse_res_time(text):
+    tl = text.lower().replace(" ", "")
+    m = re.match(r"^(\d{1,2})(?::(\d{2}))?(am|pm)?$", tl)
+    if not m:
+        return None
+    hour = int(m.group(1))
+    minute = int(m.group(2)) if m.group(2) else 0
+    period = m.group(3)
+    if period == "pm" and hour != 12:
+        hour += 12
+    if period == "am" and hour == 12:
+        hour = 0
+    if 0 <= hour <= 23 and 0 <= minute <= 59:
+        suffix = "AM" if hour < 12 else "PM"
+        return f"{hour:02d}:{minute:02d} {suffix}"
+    return None
+
+
+async def send_reservation_date_picker(sender, lang="en"):
+    today = datetime.date.today()
+    rows = []
+    for i in range(1, 8):
+        d = today + datetime.timedelta(days=i)
+        rows.append({
+            "id": d.strftime("%d %b %Y"),
+            "title": d.strftime("%A"),
+            "description": d.strftime("%d %B %Y")
+        })
+    url = f"https://graph.facebook.com/v18.0/{WHATSAPP_PHONE_NUMBER_ID}/messages"
+    headers = {"Authorization": f"Bearer {WHATSAPP_TOKEN}", "Content-Type": "application/json"}
+    payload = {
+        "messaging_product": "whatsapp", "to": sender, "type": "interactive",
+        "interactive": {
+            "type": "list",
+            "header": {"type": "text", "text": "🗓️ Reserve a Table"},
+            "body": {"text": "Which date would you like to book?\n\nOr type a date e.g. *25 Dec*"},
+            "footer": {"text": "Wild Bites Restaurant"},
+            "action": {"button": "Choose Date", "sections": [{"title": "Next 7 days", "rows": rows}]}
+        }
+    }
+    async with aiohttp.ClientSession() as s:
+        async with s.post(url, json=payload, headers=headers) as r:
+            _ = await r.text()
+
+
+async def send_reservation_time_picker(sender, lang="en"):
+    rows = [
+        {"id": "12:00 PM", "title": "12:00 PM", "description": "Lunch"},
+        {"id": "01:00 PM", "title": "01:00 PM", "description": "Lunch"},
+        {"id": "02:00 PM", "title": "02:00 PM", "description": "Afternoon"},
+        {"id": "07:00 PM", "title": "07:00 PM", "description": "Dinner"},
+        {"id": "07:30 PM", "title": "07:30 PM", "description": "Dinner"},
+        {"id": "08:00 PM", "title": "08:00 PM", "description": "Dinner"},
+        {"id": "08:30 PM", "title": "08:30 PM", "description": "Dinner"},
+        {"id": "09:00 PM", "title": "09:00 PM", "description": "Dinner"},
+        {"id": "09:30 PM", "title": "09:30 PM", "description": "Late dinner"},
+        {"id": "10:00 PM", "title": "10:00 PM", "description": "Late dinner"},
+    ]
+    url = f"https://graph.facebook.com/v18.0/{WHATSAPP_PHONE_NUMBER_ID}/messages"
+    headers = {"Authorization": f"Bearer {WHATSAPP_TOKEN}", "Content-Type": "application/json"}
+    payload = {
+        "messaging_product": "whatsapp", "to": sender, "type": "interactive",
+        "interactive": {
+            "type": "list",
+            "header": {"type": "text", "text": "⏰ Choose a Time"},
+            "body": {"text": "What time would you like to arrive?\n\nOr type like *7:30 PM*"},
+            "footer": {"text": "Wild Bites Restaurant"},
+            "action": {"button": "Choose Time", "sections": [{"title": "Available times", "rows": rows}]}
+        }
+    }
+    async with aiohttp.ClientSession() as s:
+        async with s.post(url, json=payload, headers=headers) as r:
+            _ = await r.text()
+
+
+async def send_guest_picker(sender, lang="en"):
+    url = f"https://graph.facebook.com/v18.0/{WHATSAPP_PHONE_NUMBER_ID}/messages"
+    headers = {"Authorization": f"Bearer {WHATSAPP_TOKEN}", "Content-Type": "application/json"}
+    payload = {
+        "messaging_product": "whatsapp", "to": sender, "type": "interactive",
+        "interactive": {
+            "type": "button",
+            "body": {"text": "How many guests will be joining? 😊\n\nTap a button or type a number"},
+            "action": {"buttons": [
+                {"type": "reply", "reply": {"id": "GUEST_2", "title": "2 guests"}},
+                {"type": "reply", "reply": {"id": "GUEST_4", "title": "4 guests"}},
+                {"type": "reply", "reply": {"id": "GUEST_6", "title": "6+ guests"}},
+            ]}
+        }
+    }
+    async with aiohttp.ClientSession() as s:
+        async with s.post(url, json=payload, headers=headers) as r:
+            _ = await r.text()
+
+
+async def send_reservation_summary(sender, res, lang="en"):
+    url = f"https://graph.facebook.com/v18.0/{WHATSAPP_PHONE_NUMBER_ID}/messages"
+    headers = {"Authorization": f"Bearer {WHATSAPP_TOKEN}", "Content-Type": "application/json"}
+    summary = (
+        f"*Here\'s your reservation:*\n\n"
+        f"👤 Name: *{res.get('name', '—')}*\n"
+        f"📅 Date: *{res.get('date', '—')}*\n"
+        f"⏰ Time: *{res.get('time', '—')}*\n"
+        f"👥 Guests: *{res.get('guests', '—')}*\n\n"
+        f"Shall I confirm this booking?"
+    )
+    payload = {
+        "messaging_product": "whatsapp", "to": sender, "type": "interactive",
+        "interactive": {
+            "type": "button",
+            "header": {"type": "text", "text": "🗓️ Confirm Reservation"},
+            "body": {"text": summary},
+            "footer": {"text": "Wild Bites Restaurant"},
+            "action": {"buttons": [
+                {"type": "reply", "reply": {"id": "RES_CONFIRM", "title": "Yes, Confirm!"}},
+                {"type": "reply", "reply": {"id": "RES_CANCEL", "title": "Cancel"}},
+            ]}
+        }
+    }
+    async with aiohttp.ClientSession() as s:
+        async with s.post(url, json=payload, headers=headers) as r:
+            _ = await r.text()
+
+
+async def finalize_reservation(sender, session, lang="en"):
+    reservation_counter[0] += 1
+    res_id = reservation_counter[0]
+    res = session["reserve_data"]
+
+    reservations[res_id] = {
+        "id": res_id,
+        "customer": sender,
+        "name": res.get("name", ""),
+        "date": res.get("date", ""),
+        "time": res.get("time", ""),
+        "guests": res.get("guests", ""),
+        "status": "confirmed",
+        "created_at": datetime.datetime.now().isoformat(),
+    }
+
+    # Confirm to customer
+    await send_text_message(sender,
+        f"Your table is booked! 🎉\n\n"
+        f"*Booking #{res_id}*\n"
+        f"👤 {res.get('name')}\n"
+        f"📅 {res.get('date')}\n"
+        f"⏰ {res.get('time')}\n"
+        f"👥 {res.get('guests')} guests\n\n"
+        f"We look forward to seeing you! If you need to cancel, just reply *cancel #{res_id}* 😊"
+    )
+
+    # Notify manager
+    mgr_msg = (
+        f"📅 *New Reservation #{res_id}*\n\n"
+        f"👤 {res.get('name')}\n"
+        f"📱 +{sender}\n"
+        f"📅 {res.get('date')}\n"
+        f"⏰ {res.get('time')}\n"
+        f"👥 {res.get('guests')} guests"
+    )
+    await send_whatsapp_to_number(MANAGER_NUMBER, mgr_msg)
+
+    session["stage"] = "menu"
+    session["reserve_data"] = {}
+
+
+# ── GET /reservations endpoint ────────────────────────────────
 async def send_text_message(to, message):
     url = f"https://graph.facebook.com/v18.0/{WHATSAPP_PHONE_NUMBER_ID}/messages"
     headers = {"Authorization": f"Bearer {WHATSAPP_TOKEN}", "Content-Type": "application/json"}
@@ -2483,6 +2815,22 @@ async def manager_update(request: Request):
     except Exception as e:
         print(f"Manager update error: {e}")
         return {"status": "error"}
+
+@app.get("/reservations")
+async def get_reservations():
+    """View today and upcoming reservations"""
+    today = datetime.date.today().strftime("%A, %d %b %Y")
+    tomorrow = (datetime.date.today() + datetime.timedelta(days=1)).strftime("%A, %d %b %Y")
+    today_list = [r for r in reservations.values() if today in r.get("date","")]
+    tomorrow_list = [r for r in reservations.values() if tomorrow in r.get("date","")]
+    all_list = sorted(reservations.values(), key=lambda x: x["created_at"], reverse=True)
+    return {
+        "today": today_list,
+        "tomorrow": tomorrow_list,
+        "all": all_list,
+        "total": len(reservations)
+    }
+
 
 @app.post("/twilio-call")
 async def twilio_call(request: Request):
