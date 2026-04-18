@@ -983,8 +983,7 @@ async def handle_flow(sender, text, is_button=False):
         return
 
     # ── GREETINGS ─────────────────────────────────────────
-    greet_words = ["hi", "hello", "hey", "start", "salam", "hola", "yo", "sup", "hii", "hiii", "helo", "heyy"]
-    if text_lower in greet_words or any(text_lower.startswith(g + " ") for g in greet_words):
+    if text_lower in ["hi", "hello", "hey", "start", "salam", "hola"]:
         if stage in ["lang_select", "ai_chat"]:
             await send_language_selection(sender)
         else:
@@ -994,30 +993,14 @@ async def handle_flow(sender, text, is_button=False):
             await send_main_menu(sender, session["order"], lang)
         return
 
-    # ── MENU INTENT (natural language) ────────────────────
-    # Catches: "menu", "show menu", "can you send me menu", "i want to see the menu",
-    # "what do you have", "what's on the menu", "order", "i want to order", etc.
-    menu_keywords = [
-        "menu", "show me", "what do you have", "what's on", "whats on",
-        "see options", "see what", "what can i", "i want to order",
-        "i want to eat", "place order", "place an order", "place my order",
-        "order food", "start order", "order now", "browse", "food options",
-        "what's available", "whats available", "categories", "items",
-    ]
-    food_words = ["food", "eat", "hungry", "order"]
-    is_menu_request = (
-        text_lower == "menu"
-        or any(k in text_lower for k in menu_keywords)
-        or (any(w in text_lower for w in food_words) and len(text_lower) <= 25)
-    )
-    if is_menu_request and stage not in ["get_name", "address", "payment"]:
+    if text_lower == "menu":
         session["stage"] = "menu"
         await send_main_menu(sender, session["order"], lang)
         return
 
-    # ── INTENT ROUTING (category keywords) ────────────────
+    # ── INTENT ROUTING ────────────────────────────────────
     cat_guess = guess_category(text_lower)
-    if cat_guess and stage not in ["get_name", "address", "payment"]:
+    if cat_guess and stage not in ["get_name", "address"]:
         session["stage"] = "items"
         session["current_cat"] = cat_guess
         await send_category_items(sender, cat_guess, session["order"], lang)
@@ -1027,8 +1010,7 @@ async def handle_flow(sender, text, is_button=False):
     reply = await get_ai_response(sender, text, lang)
     await send_text_message(sender, reply)
     session["conversation"].append(text)
-    # Show menu suggestion quickly so user never gets stuck in AI chat
-    if len(session["conversation"]) >= 1 and stage not in ["get_name", "address", "payment", "items", "qty_control"]:
+    if len(session["conversation"]) >= 2:
         await send_menu_suggestion(sender, lang)
         session["conversation"] = []
 
