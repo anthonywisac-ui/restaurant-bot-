@@ -4,7 +4,7 @@ import random
 import re
 import traceback
 from db import (
-    customer_sessions, saved_ orders, customer_profiles,
+    customer_sessions, saved_orders, customer_profiles,
     customer_order_lookup, manager_pending
 )
 from config import (
