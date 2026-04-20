@@ -1,0 +1,24 @@
+{
+  "deals": {
+    "name": "🔥 Deals (Best Value)",
+    "items": {
+      "DL1": {"name": "Burger Combo Add-on", "price": 4.99, "emoji": "🔥", "desc": "Add fries + soda to any burger"},
+      "DL2": {"name": "Double Smash Meal Deal", "price": 18.99, "emoji": "🍔", "desc": "Smash burger + fries + soda"},
+      "DL3": {"name": "Pizza + Wings Deal", "price": 21.99, "emoji": "🍕", "desc": "Any pizza + 6 wings"},
+      "DL4": {"name": "Family Pizza Deal", "price": 29.99, "emoji": "👨‍👩‍👧‍👦", "desc": "2 pizzas + 2 sodas"},
+      "DL5": {"name": "Ribs Night Deal", "price": 21.99, "emoji": "🍖", "desc": "Half rack + 2 sides + soda"},
+      "DL6": {"name": "Fish & Chips Combo", "price": 18.49, "emoji": "🐟", "desc": "Fish & chips + soda"}
+    }
+  },
+  "fastfood": {
+    "name": "🍔 Burgers & Fast Food",
+    "items": {
+      "FF1": {"name": "Classic Smash Burger", "price": 12.99, "emoji": "🍔", "desc": "Double patty, special sauce, lettuce"},
+      "FF2": {"name": "Crispy Chicken Sandwich", "price": 11.99, "emoji": "🍗", "desc": "Crispy fried chicken, pickles, mayo"},
+      "FF3": {"name": "BBQ Bacon Burger", "price": 14.99, "emoji": "🥓", "desc": "Beef patty, bacon, BBQ sauce"},
+      "FF4": {"name": "Veggie Delight Burger", "price": 10.99, "emoji": "🥬", "desc": "Plant-based patty, avocado"},
+      "FF5": {"name": "Spicy Jalapeno Burger", "price": 13.99, "emoji": "🌶️", "desc": "Beef patty, jalapenos, pepper jack"}
+    }
+  }
+  // ... add all other categories: pizza, bbq, fish, sides, drinks, desserts
+}
