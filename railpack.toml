@@ -1,3 +1,4 @@
 [build]
-# Disable Docker secrets for build - use environment variables instead
-# This prevents Railpack from trying to mount non-existent secrets
+# Disable automatic secret mounting for packages
+# Stripe API key is provided via STRIPE_SECRET_KEY environment variable at runtime
+secrets = false
