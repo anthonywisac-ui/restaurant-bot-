@@ -8,6 +8,7 @@ from dotenv import load_dotenv
 from fastapi import FastAPI, Request
 from fastapi.responses import PlainTextResponse, HTMLResponse
 import uvicorn
+import stripe
 
 load_dotenv()
 
@@ -19,6 +20,7 @@ WHATSAPP_PHONE_NUMBER_ID = os.getenv("WHATSAPP_PHONE_NUMBER_ID")
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 GOOGLE_SHEET_WEBHOOK = os.getenv("GOOGLE_SHEET_WEBHOOK", "")
 MANAGER_NUMBER = os.getenv("MANAGER_NUMBER", "923351021321")  # FIX #26
+stripe.api_key = os.getenv("STRIPE_SECRET_KEY")
 
 MIN_DELIVERY_ORDER = 30.00
 MIN_PICKUP_ORDER = 10.00
@@ -918,6 +920,31 @@ async def generate_qr(table_number: int):
         "image_base64": b64encode(img_io.getvalue()).decode()
     }
 
+@app.post("/create-checkout-session")
+async def create_checkout_session(request: Request):
+    data = await request.json()
+
+    order_id = data["order_id"]
+    amount = int(data["amount"] * 100)
+
+    session = stripe.checkout.Session.create(
+        payment_method_types=["card"],
+        line_items=[{
+            "price_data": {
+                "currency": "usd",
+                "product_data": {"name": f"Order {order_id}"},
+                "unit_amount": amount,
+            },
+            "quantity": 1,
+        }],
+        mode="payment",
+        success_url="https://whatsapp-ai-agent-production-e5d7.up.railway.app/success",
+        cancel_url="https://whatsapp-ai-agent-production-e5d7.up.railway.app/cancel",
+        metadata={"order_id": order_id}
+    )
+
+    return {"url": session.url}
+
 @app.get("/webhook")
 async def verify_webhook(request: Request):
     params = dict(request.query_params)
@@ -1470,8 +1497,61 @@ async def _handle_flow_inner(sender, text, is_button=False):
             await send_payment_buttons(sender, session.get("name", ""), lang)
         return
 
+import stripe
+
+stripe.api_key = os.getenv("STRIPE_SECRET_KEY")
+STRIPE_PUBLISHABLE_KEY = os.getenv("STRIPE_PUBLISHABLE_KEY")
+
+@app.post("/create-payment-intent")
+async def create_payment_intent(request: Request):
+    """Create Stripe payment intent"""
+    try:
+        data = await request.json()
+        order_id = data.get("order_id")
+        amount = int(data.get("amount") * 100)  # Convert to cents
+        
+        intent = stripe.PaymentIntent.create(
+            amount=amount,
+            currency="usd",
+            metadata={"order_id": order_id}
+        )
+        
+        return {
+            "clientSecret": intent.client_secret,
+            "publishableKey": STRIPE_PUBLISHABLE_KEY
+        }
+    except Exception as e:
+        print(f"Payment error: {e}")
+        return {"error": str(e)}
+
+@app.post("/confirm-payment")
+async def confirm_payment(request: Request):
+    """Confirm payment and update order"""
+    try:
+        data = await request.json()
+        payment_intent_id = data.get("payment_intent_id")
+        order_id = data.get("order_id")
+        
+        # Verify payment
+        intent = stripe.PaymentIntent.retrieve(payment_intent_id)
+        
+        if intent.status == "succeeded":
+            # Update order status
+            if order_id in saved_orders:
+                saved_orders[order_id]["payment_status"] = "paid"
+                saved_orders[order_id]["payment_method"] = "stripe"
+            
+            return {"success": True, "message": "Payment successful"}
+        else:
+            return {"success": False, "message": "Payment failed"}
+    
+    except Exception as e:
+        print(f"Confirmation error: {e}")
+        return {"error": str(e)}
+
+
     # ── PAYMENT ──────────────────────────────────────────
-    if text in ["CASH", "CARD", "APPLE_PAY"]:
+    if text in ["CASH", ""CARD_STRIPE", "APPLE_PAY"]:
         payment_map = {"CASH": t(lang, "cash"), "CARD": t(lang, "card"), "APPLE_PAY": t(lang, "apple_pay")}
         session["payment"] = payment_map[text]
         order_id = await send_order_confirmed(sender, session, lang)
@@ -1484,6 +1564,35 @@ async def _handle_flow_inner(sender, text, is_button=False):
         session["stage"] = "post_order"
         session["post_order_at"] = time.time()
         return
+
+if text == "CARD_STRIPE":
+
+    total = get_order_total(session["order"])
+    tax = total * 0.08
+    delivery_charge = get_delivery_fee(total, session.get("delivery_type"))
+    grand_total = total + tax + delivery_charge
+
+    order_id = str(int(time.time()))
+
+    saved_orders[order_id] = {
+        "order": session["order"],
+        "sender": sender
+    }
+
+    async with aiohttp.ClientSession() as s:
+    async with s.post(
+       "https://whatsapp-ai-agent-production-e5d7.up.railway.app/create-checkout-session",
+            json={
+                "order_id": order_id,
+                "amount": grand_total
+            }
+        ) as r:
+            res = await r.json()
+
+    payment_url = res.get("url")
+
+    await send_text_message(sender, f"💳 Pay here:\n{payment_url}")
+    return
 
     # ── STAGE TEXT ───────────────────────────────────────
     if stage == "get_name":
@@ -2558,6 +2667,37 @@ async def manager_update(request: Request):
     except Exception as e:
         print(f"Manager update error: {e}")
         return {"status": "error"}
+
+
+@app.post("/stripe-webhook")
+async def stripe_webhook(request: Request):
+
+    payload = await request.body()
+    sig_header = request.headers.get("stripe-signature")
+
+    try:
+        event = stripe.Webhook.construct_event(
+            payload, sig_header, endpoint_secret
+        )
+    except Exception:
+        raise HTTPException(status_code=400, detail="Webhook error")
+
+    # ✅ event type check
+    if event["type"] == "checkout.session.completed":
+        session = event["data"]["object"]
+
+        order_id = session.get("metadata", {}).get("order_id")
+
+        if order_id and order_id in saved_orders:
+            sender = saved_orders[order_id]["sender"]
+
+            await send_text_message(
+                sender,
+                "✅ Payment received!\nOrder confirmed 🎉"
+            )
+
+    return {"status": "ok"}
+
 
 @app.post("/twilio-call")
 async def twilio_call(request: Request):
