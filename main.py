@@ -576,7 +576,7 @@ customer_order_lookup = {}  # FIX #22 — now list of order_ids per customer
 manager_pending = {}
 customer_profiles = {}
 
-def new_session(sender=None):
+def new_session(sender=None, table_number=None):
     profile = customer_profiles.get(sender, {}) if sender else {}
     is_returning = bool(profile.get("name"))
     return {
@@ -584,6 +584,8 @@ def new_session(sender=None):
         "lang": profile.get("lang", "en"),
         "order": {},
         "delivery_type": profile.get("delivery_type", ""),
+        "table_number": table_number,
+        "order_type": "dine_in" if table_number else "",
         "address": profile.get("address", ""),
         "name": profile.get("name", ""),
         "payment": profile.get("payment", ""),
@@ -888,6 +890,34 @@ def is_menu_request(text_lower):
     return text_lower in ["menu", "show menu", "see menu", "browse menu", "main menu",
                            "show me menu", "the menu"] or text_lower.startswith("menu ")
 
+
+@app.get("/generate-qr/{table_number}")
+async def generate_qr(table_number: int):
+    """Generate QR code for a specific table"""
+    import qrcode
+    import io
+    from base64 import b64encode
+    
+    # QR mein table ID + unique token encode karo
+    qr_data = f"https://your-bot-domain.com/order?table={table_number}&session={random.randint(10000, 99999)}"
+    
+    qr = qrcode.QRCode(version=1, box_size=10, border=4)
+    qr.add_data(qr_data)
+    qr.make(fit=True)
+    
+    img = qr.make_image(fill_color="black", back_color="white")
+    
+    # Save as base64
+    img_io = io.BytesIO()
+    img.save(img_io, 'PNG')
+    img_io.seek(0)
+    
+    return {
+        "table_number": table_number,
+        "qr_link": qr_data,
+        "image_base64": b64encode(img_io.getvalue()).decode()
+    }
+
 @app.get("/webhook")
 async def verify_webhook(request: Request):
     params = dict(request.query_params)
@@ -909,6 +939,19 @@ async def handle_webhook(request: Request):
             if msg_type == "text":
                 text = message["text"]["body"].strip()
                 print(f"MSG: {text} from {sender}")
+                
+                # ✅ CHECK IF QR SCAN (table param in text)
+                table_match = re.search(r'table=(\d+)', text)
+                if table_match:
+                    table_num = int(table_match.group(1))
+                    # New session with table
+                    customer_sessions[sender] = new_session(sender, table_number=table_num)
+                    session = customer_sessions[sender]
+                    session["stage"] = "lang_select"
+                    session["order_type"] = "dine_in"
+                    await send_language_selection(sender)
+                    return
+                
                 # FIX #25 — manager check REMOVED. Only ai-agent handles manager replies.
                 await handle_flow(sender, text)
             elif msg_type == "interactive":
@@ -1391,7 +1434,17 @@ async def _handle_flow_inner(sender, text, is_button=False):
         await send_text_message(sender, t(lang, "cancelled"))
         return
 
-    # ── DELIVERY / PICKUP ────────────────────────────────
+
+    # ✅ DINE-IN OPTION
+    if text == "DINE_IN":
+        session["delivery_type"] = "dine_in"
+        table_num = session.get("table_number", "?")
+        session["stage"] = "payment"
+        await send_text_message(sender, f"🍽️ Perfect! Table {table_num} noted.\n\nNow choose payment method 👇")
+        await send_payment_buttons(sender, session.get("name", ""), lang)
+        return
+
+        # ── DELIVERY / PICKUP ────────────────────────────────
     if text in ["DELIVERY", "PICKUP"]:
         total = get_order_total(session["order"])
         if text == "DELIVERY":
@@ -2104,19 +2157,34 @@ async def send_order_summary(sender, order, lang="en"):
             _ = await r.text()
 
 async def send_delivery_buttons(sender, name, lang="en"):
+    session = get_session(sender)
+    table_num = session.get("table_number")
+    
     url = f"https://graph.facebook.com/v18.0/{WHATSAPP_PHONE_NUMBER_ID}/messages"
     headers = {"Authorization": f"Bearer {WHATSAPP_TOKEN}", "Content-Type": "application/json"}
+    
+    # ✅ DINE-IN KE LIYE ALAG BUTTONS
+    if table_num:
+        body_text = f"Hey {name}! You're at Table {table_num} 🍽️\n\nReady to order?"
+        buttons = [
+            {"type": "reply", "reply": {"id": "DINE_IN", "title": safe_btn(t(lang, "dine_in"))}},
+            {"type": "reply", "reply": {"id": "PICKUP", "title": safe_btn("Takeaway")}},
+        ]
+    else:
+        body_text = f"Hey {name}! Delivery or Pickup?\n\n{t(lang, 'delivery_info')}"
+        buttons = [
+            {"type": "reply", "reply": {"id": "DELIVERY", "title": safe_btn(t(lang, "delivery"))}},
+            {"type": "reply", "reply": {"id": "PICKUP", "title": safe_btn(t(lang, "pickup"))}},
+        ]
+    
     payload = {
         "messaging_product": "whatsapp", "to": sender, "type": "interactive",
         "interactive": {
             "type": "button",
             "header": {"type": "text", "text": "🍽️ Wild Bites Restaurant"},
-            "body": {"text": f"Hey {name}! Delivery or Pickup?\n\n{t(lang, 'delivery_info')}"},
+            "body": {"text": body_text},
             "footer": {"text": "Wild Bites Restaurant"},
-            "action": {"buttons": [
-                {"type": "reply", "reply": {"id": "DELIVERY", "title": safe_btn(t(lang, "delivery"))}},
-                {"type": "reply", "reply": {"id": "PICKUP", "title": safe_btn(t(lang, "pickup"))}},
-            ]}
+            "action": {"buttons": buttons}
         }
     }
     async with aiohttp.ClientSession() as s:
@@ -2197,7 +2265,14 @@ async def send_order_confirmed(sender, session_data, lang="en"):
         if order_id not in saved_orders:
             break
 
-    eta = "30-45 minutes" if delivery_type == "delivery" else "15-20 minutes"
+    if delivery_type == "dine_in":
+        table_num = session_data.get("table_number", "?")
+        location_text = f"🍽️ Table {table_num}"
+        eta = "10-15 minutes"
+    else:
+        eta = "30-45 minutes" if delivery_type == "delivery" else "15-20 minutes"
+        location_text = f"{'Delivery: ' + session_data.get('address', '') if delivery_type == 'delivery' else 'Store Pickup'}"
+    
     delivery_fee_line = f"\n{t(lang, 'delivery_charge')} ${delivery_charge:.2f}" if delivery_charge > 0 else ""
 
     msg = f"""{t(lang, 'order_confirmed')}, {session_data.get('name', 'Customer')}! #{order_id}*
@@ -2208,7 +2283,7 @@ async def send_order_confirmed(sender, session_data, lang="en"):
 {t(lang, 'tax')} ${tax:.2f}{delivery_fee_line}
 {t(lang, 'grand_total')} ${grand_total:.2f}*
 
-{'Delivery: ' + session_data.get('address', '') if delivery_type == 'delivery' else 'Store Pickup'}
+{location_text}
 Payment: {session_data.get('payment', '')}
 {t(lang, 'ready_in')} *{eta}*
 
