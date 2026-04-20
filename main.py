@@ -4,8 +4,9 @@ import aiohttp
 import traceback
 import random
 import time
+import qrcode  # FIXED: added missing import
 from dotenv import load_dotenv
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, Request, HTTPException  # FIXED: added HTTPException
 from fastapi.responses import PlainTextResponse, HTMLResponse
 import uvicorn
 import stripe
@@ -19,14 +20,15 @@ WHATSAPP_TOKEN = os.getenv("WHATSAPP_TOKEN")
 WHATSAPP_PHONE_NUMBER_ID = os.getenv("WHATSAPP_PHONE_NUMBER_ID")
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 GOOGLE_SHEET_WEBHOOK = os.getenv("GOOGLE_SHEET_WEBHOOK", "")
-MANAGER_NUMBER = os.getenv("MANAGER_NUMBER", "923351021321")  # FIX #26
+MANAGER_NUMBER = os.getenv("MANAGER_NUMBER", "923351021321")
 stripe.api_key = os.getenv("STRIPE_SECRET_KEY")
+STRIPE_WEBHOOK_SECRET = os.getenv("STRIPE_WEBHOOK_SECRET")  # FIXED: added for webhook
 
 MIN_DELIVERY_ORDER = 30.00
 MIN_PICKUP_ORDER = 10.00
 DELIVERY_CHARGE = 4.99
-FREE_DELIVERY_THRESHOLD = 50.00  # FIX #17
-POST_ORDER_WINDOW = 180  # FIX #20 — 3 min grace window after order
+FREE_DELIVERY_THRESHOLD = 50.00
+POST_ORDER_WINDOW = 180
 
 print(f"Token: {WHATSAPP_TOKEN[:20] if WHATSAPP_TOKEN else 'MISSING'}...")
 print(f"Phone ID: {WHATSAPP_PHONE_NUMBER_ID}")
@@ -80,29 +82,29 @@ STRINGS = {
         "yes_combo": "✅ Yes! Add Combo",
         "no_combo": "❌ No Thanks",
         "cancelled": "❌ Order cancelled.\n\nType *menu* to start again.",
-        "greeting_welcome": "Welcome to Wild Bites! 🍔 Ready to order?",  # FIX #35
-        "add_more_items": "🍽️ Add More Items",  # FIX #16
-        "back": "⬅️ Back",  # FIX #19
-        "invalid_name": "Please enter your first name (2+ characters, letters). 😊",  # FIX #14
-        "invalid_address": "Please share a complete address (street + city). Example: 123 Main St, New York",  # FIX #18
-        "pick_burger_first": "🍔 Let's pick a burger first, then I'll add the combo for $4.99!",  # FIX #2
-        "choose_burger_deal": "Which burger for your Smash Meal Deal? 🍔",  # FIX #3
+        "greeting_welcome": "Welcome to Wild Bites! 🍔 Ready to order?",
+        "add_more_items": "🍽️ Add More Items",
+        "back": "⬅️ Back",
+        "invalid_name": "Please enter your first name (2+ characters, letters). 😊",
+        "invalid_address": "Please share a complete address (street + city). Example: 123 Main St, New York",
+        "pick_burger_first": "🍔 Let's pick a burger first, then I'll add the combo for $4.99!",
+        "choose_burger_deal": "Which burger for your Smash Meal Deal? 🍔",
         "choose_pizza_deal": "Which pizza for your Pizza + Wings Deal? 🍕",
         "choose_2pizzas": "Pick your first pizza for the Family Deal 🍕",
         "choose_2nd_pizza": "Great! Now pick your second pizza 🍕",
-        "pick_bbq_sides": "Pick 2 sides for your BBQ plate:",  # FIX #10
+        "pick_bbq_sides": "Pick 2 sides for your BBQ plate:",
         "pick_ribs_sides": "Pick 2 sides for Ribs Night Deal:",
         "side_mac": "🧀 Mac & Cheese",
         "side_fries": "🍟 Fries",
         "side_slaw": "🥬 Coleslaw",
         "side_salad": "🥗 Caesar Salad",
-        "removed_item": "✅ Removed from cart",  # FIX #39
+        "removed_item": "✅ Removed from cart",
         "deal_added": "🔥 Deal added to cart!",
         "thanks_reply": "You're welcome! 😊 Type *menu* anytime to order again.",
         "bye_reply": "Goodbye! Enjoy your meal! 🍔",
-        "delivery_note_will_add": "🚚 *Note:* +$4.99 delivery fee if you choose delivery (FREE over $50)",  # FIX #13
+        "delivery_note_will_add": "🚚 *Note:* +$4.99 delivery fee if you choose delivery (FREE over $50)",
         "delivery_note_free": "✨ *You qualify for free delivery!*",
-        "change_mind": "Changed your mind about delivery/pickup?",  # FIX #19
+        "change_mind": "Changed your mind about delivery/pickup?",
     },
     "ar": {
         "menu_header": "🍽️ مطعم وايلد بايتس",
@@ -574,7 +576,7 @@ def t(lang, key):
 customer_sessions = {}
 last_message_time = {}
 saved_orders = {}
-customer_order_lookup = {}  # FIX #22 — now list of order_ids per customer
+customer_order_lookup = {}
 manager_pending = {}
 customer_profiles = {}
 
@@ -594,12 +596,11 @@ def new_session(sender=None, table_number=None):
         "last_added": None,
         "current_cat": None,
         "conversation": [],
-        "upsell_declined_types": set(),  # FIX #9
-        "upsell_shown_for": set(),  # FIX #4
+        "upsell_declined_types": set(),
+        "upsell_shown_for": set(),
         "order_id": None,
-        "deal_context": None,  # FIX #3
-        "post_order_at": 0,  # FIX #20
-        # REMOVED: pending_combo (FIX #38), delay_warned (FIX #36), _last_text (FIX #37)
+        "deal_context": None,
+        "post_order_at": 0,
     }
 
 def get_session(sender):
@@ -622,7 +623,6 @@ def save_profile(sender, session):
         customer_profiles[sender] = profile
 
 def add_to_order_history(sender, order_id, order_items):
-    # FIX #27 — store item_ids AND quantities
     profile = customer_profiles.get(sender, {"order_history": []})
     if "order_history" not in profile:
         profile["order_history"] = []
@@ -645,7 +645,6 @@ def get_favorite_items(sender):
     item_counts = {}
     for order in history:
         for item in order.get("items", []):
-            # Support both new (dict) and legacy (string) format
             name = item.get("name") if isinstance(item, dict) else item
             if name:
                 item_counts[name] = item_counts.get(name, 0) + 1
@@ -738,7 +737,6 @@ MENU = {
     }
 }
 
-# FIX #3 — deal composition rules
 DEAL_RULES = {
     "DL1": {"requires": "burger_in_cart"},
     "DL2": {"picks": ["burger"]},
@@ -748,7 +746,7 @@ DEAL_RULES = {
     "DL6": {"picks": []},
 }
 
-BBQ_NEEDS_SIDES = {"BB1", "BB2", "BB4", "BB5"}  # FIX #10
+BBQ_NEEDS_SIDES = {"BB1", "BB2", "BB4", "BB5"}
 
 SIDE_CHOICES = {
     "MAC": "Mac & Cheese",
@@ -768,7 +766,6 @@ def get_order_total(order):
     return sum(v["item"]["price"] * v["qty"] for v in order.values())
 
 def get_delivery_fee(subtotal, delivery_type):
-    # FIX #17 — free delivery over $50
     if delivery_type != "delivery":
         return 0.0
     if subtotal >= FREE_DELIVERY_THRESHOLD:
@@ -783,7 +780,6 @@ def get_order_text(order):
         item = v["item"]
         base = f"{item['emoji']} {item['name']} x{v['qty']} — ${item['price'] * v['qty']:.2f}"
         lines.append(base)
-        # FIX #3, #10 — show deal components and sides (use simple indent, WhatsApp-safe)
         for comp in v.get("components", []):
             lines.append(f"  • {comp}")
         for side in v.get("sides", []):
@@ -798,20 +794,18 @@ def find_item(item_id):
 
 def has_any_side(order): return any(k.startswith("SD") for k in order)
 def has_any_drink(order): return any(k.startswith("DR") for k in order)
-def has_any_dessert(order): return any(k.startswith("DS") for k in order)  # FIX #11
-def has_any_main(order):  # FIX #5
+def has_any_dessert(order): return any(k.startswith("DS") for k in order)
+def has_any_main(order):
     return any(k.startswith(("FF", "PZ", "BB", "FS")) for k in order)
 def is_burger(item_id): return item_id.startswith("FF")
 def is_pizza(item_id): return item_id.startswith("PZ")
 
 def truncate_title(title, max_len=24):
-    # FIX #7 — WhatsApp list title 24-char limit
     if len(title) <= max_len:
         return title
     return title[:max_len - 1] + "…"
 
 def safe_btn(text, max_len=20):
-    # WhatsApp button title 20-char limit
     if len(text) <= max_len:
         return text
     return text[:max_len - 1] + "…"
@@ -828,7 +822,6 @@ def guess_category(text_lower):
     return None
 
 def is_order_status_query(text_lower):
-    # EXPANDED: catch "how much time", "not arrived", "how long", "kab aayega" etc.
     keywords = [
         "order status", "where is my order", "where's my order",
         "wheres my order", "order update", "ready yet", "track my order",
@@ -841,36 +834,29 @@ def is_order_status_query(text_lower):
     ]
     if any(w in text_lower for w in keywords):
         return True
-    # Also catch explicit order number mentions: #12345, order 12345, my order #12345
     if re.search(r'(order|#)\s*#?\s*\d{5}', text_lower):
         return True
     return False
 
 def extract_order_number(text):
-    """Extract 5-digit order number from customer text."""
     m = re.search(r'\b(\d{5})\b', text or "")
     return int(m.group(1)) if m else None
 
 def is_valid_name(text):
-    # FIX #14
     t = text.strip()
     if len(t) < 2 or len(t) > 30:
         return False
-    # reject button-like IDs (ALL_CAPS_UNDERSCORES)
     if re.match(r"^[A-Z_]+$", t):
         return False
-    # reject common commands
     lower = t.lower()
     if lower in ["menu", "hi", "hello", "hey", "start", "back", "cancel", "help",
                  "yes", "no", "ok", "thanks", "thank you", "restart", "reset"]:
         return False
-    # must contain at least one letter (supports Arabic/Hindi/CJK/Malayalam)
     if not re.search(r"[A-Za-z\u0600-\u06FF\u0900-\u097F\u4e00-\u9fff\u0D00-\u0D7F]", t):
         return False
     return True
 
 def is_valid_address(text):
-    # FIX #18
     t = text.strip()
     if len(t) < 8:
         return False
@@ -888,19 +874,16 @@ def is_bye(text_lower):
     return text_lower in ["bye", "goodbye", "cya", "see ya"]
 
 def is_menu_request(text_lower):
-    # FIX #34
     return text_lower in ["menu", "show menu", "see menu", "browse menu", "main menu",
                            "show me menu", "the menu"] or text_lower.startswith("menu ")
 
 
 @app.get("/generate-qr/{table_number}")
 async def generate_qr(table_number: int):
-    """Generate QR code for a specific table"""
     import qrcode
     import io
     from base64 import b64encode
     
-    # QR mein table ID + unique token encode karo
     qr_data = f"https://your-bot-domain.com/order?table={table_number}&session={random.randint(10000, 99999)}"
     
     qr = qrcode.QRCode(version=1, box_size=10, border=4)
@@ -909,7 +892,6 @@ async def generate_qr(table_number: int):
     
     img = qr.make_image(fill_color="black", back_color="white")
     
-    # Save as base64
     img_io = io.BytesIO()
     img.save(img_io, 'PNG')
     img_io.seek(0)
@@ -923,10 +905,8 @@ async def generate_qr(table_number: int):
 @app.post("/create-checkout-session")
 async def create_checkout_session(request: Request):
     data = await request.json()
-
     order_id = data["order_id"]
     amount = int(data["amount"] * 100)
-
     session = stripe.checkout.Session.create(
         payment_method_types=["card"],
         line_items=[{
@@ -942,7 +922,6 @@ async def create_checkout_session(request: Request):
         cancel_url="https://whatsapp-ai-agent-production-e5d7.up.railway.app/cancel",
         metadata={"order_id": order_id}
     )
-
     return {"url": session.url}
 
 @app.get("/webhook")
@@ -967,11 +946,9 @@ async def handle_webhook(request: Request):
                 text = message["text"]["body"].strip()
                 print(f"MSG: {text} from {sender}")
                 
-                # ✅ CHECK IF QR SCAN (table param in text)
                 table_match = re.search(r'table=(\d+)', text)
                 if table_match:
                     table_num = int(table_match.group(1))
-                    # New session with table
                     customer_sessions[sender] = new_session(sender, table_number=table_num)
                     session = customer_sessions[sender]
                     session["stage"] = "lang_select"
@@ -979,7 +956,6 @@ async def handle_webhook(request: Request):
                     await send_language_selection(sender)
                     return
                 
-                # FIX #25 — manager check REMOVED. Only ai-agent handles manager replies.
                 await handle_flow(sender, text)
             elif msg_type == "interactive":
                 interactive = message["interactive"]
@@ -1000,7 +976,6 @@ async def handle_flow(sender, text, is_button=False):
         await _handle_flow_inner(sender, text, is_button)
     except Exception as e:
         print(f"❌ handle_flow CRASHED for {sender} text={text!r}: {e}\n{traceback.format_exc()}")
-        # Try to recover — send user something useful
         try:
             session = get_session(sender)
             lang = session.get("lang", "en")
@@ -1017,7 +992,6 @@ async def _handle_flow_inner(sender, text, is_button=False):
     lang = session.get("lang", "en")
     text_lower = text.lower().strip()
 
-    # FIX #20 — post_order window: handle as order-related for 3 mins
     if stage == "post_order":
         elapsed = time.time() - session.get("post_order_at", 0)
         if elapsed > POST_ORDER_WINDOW:
@@ -1035,25 +1009,20 @@ async def _handle_flow_inner(sender, text, is_button=False):
                 await send_text_message(sender, t(lang, "bye_reply"))
                 return
             if is_menu_request(text_lower) or text_lower in ["hi", "hello", "hey", "start"]:
-                # customer wants to order again — reset session
                 customer_sessions[sender] = new_session(sender)
                 session = customer_sessions[sender]
                 stage = session["stage"]
-                # fall through to normal flow
             else:
-                # unknown — AI reply only (no auto menu push)
                 reply = await get_ai_response(sender, text, lang, session)
                 await send_text_message(sender, reply)
                 return
 
-    # Hard reset
     if text_lower in ["restart", "reset", "start over", "clear"]:
         customer_sessions[sender] = new_session(sender)
         customer_sessions[sender]["stage"] = "lang_select"
         await send_language_selection(sender)
         return
 
-    # FIX #23 — order status only when NOT in active ordering stages
     ordering_stages = {"items", "qty_control", "upsell_check", "upsell_combo", "confirm",
                        "get_name", "address", "delivery", "payment", "deal_build",
                        "bbq_sides", "repeat_confirm"}
@@ -1061,7 +1030,6 @@ async def _handle_flow_inner(sender, text, is_button=False):
         await handle_order_status(sender, session, lang, text)
         return
 
-    # RETURNING CUSTOMER
     if stage == "returning":
         profile = customer_profiles.get(sender, {})
         name = profile.get("name", "")
@@ -1098,7 +1066,6 @@ async def _handle_flow_inner(sender, text, is_button=False):
             session["stage"] = "address_update"
             await send_text_message(sender, "Sure! What's your new delivery address?")
         elif text == "REPEAT_CONFIRM":
-            # FIX #27 — use item_id + qty
             profile = customer_profiles.get(sender, {})
             history = profile.get("order_history", [])
             if history:
@@ -1112,13 +1079,11 @@ async def _handle_flow_inner(sender, text, is_button=False):
                             if item:
                                 session["order"][iid] = {"item": item, "qty": qty}
                     else:
-                        # legacy: match by name
                         for cat_data in MENU.values():
                             for item_id, item in cat_data["items"].items():
                                 if item["name"] == it:
                                     session["order"][item_id] = {"item": item, "qty": 1}
             if session["order"]:
-                # FIX #28 — still go via summary so min-order check happens at delivery choice
                 session["stage"] = "confirm"
                 await send_order_summary(sender, session["order"], lang)
             else:
@@ -1130,7 +1095,7 @@ async def _handle_flow_inner(sender, text, is_button=False):
         return
 
     if stage == "address_update":
-        if not is_valid_address(text):  # FIX #18
+        if not is_valid_address(text):
             await send_text_message(sender, t(lang, "invalid_address"))
             return
         session["address"] = text.strip()
@@ -1140,7 +1105,6 @@ async def _handle_flow_inner(sender, text, is_button=False):
         await send_main_menu(sender, session["order"], lang)
         return
 
-    # ── LANGUAGE SELECTION ──────────────────────────────
     if stage == "lang_select":
         lang_map = {
             "LANG_EN": "en", "LANG_AR": "ar", "LANG_HI": "hi",
@@ -1151,27 +1115,23 @@ async def _handle_flow_inner(sender, text, is_button=False):
             session["lang"] = lang_map[text]
             lang = lang_map[text]
             session["stage"] = "menu"
-            # FIX #35 — hardcoded greeting, no AI call
             await send_text_message(sender, t(lang, "greeting_welcome"))
             await send_main_menu(sender, session["order"], lang)
         else:
             await send_language_selection(sender)
         return
 
-    # ── UNIVERSAL BUTTONS ───────────────────────────────
     if text in ["SHOW_MENU", "BACK_MENU", "ADD_MORE"]:
         session["stage"] = "menu"
         await send_main_menu(sender, session["order"], lang)
         return
 
-    # FIX #19 — back from payment to delivery choice
     if text == "BACK_TO_DELIVERY":
         session["stage"] = "delivery"
         session["delivery_type"] = ""
         await send_delivery_buttons(sender, session.get("name", ""), lang)
         return
 
-    # Quick remove command
     m_remove = re.match(r"^(remove|delete)\s+([a-z0-9]+)$", text_lower)
     if m_remove:
         item_id = m_remove.group(2).upper()
@@ -1180,7 +1140,6 @@ async def _handle_flow_inner(sender, text, is_button=False):
         await send_cart_view(sender, session["order"], lang)
         return
 
-    # ── CATEGORY BUTTONS ────────────────────────────────
     cat_map = {
         "CAT_DEALS": "deals", "CAT_FASTFOOD": "fastfood", "CAT_PIZZA": "pizza",
         "CAT_BBQ": "bbq", "CAT_FISH": "fish", "CAT_SIDES": "sides",
@@ -1192,7 +1151,6 @@ async def _handle_flow_inner(sender, text, is_button=False):
         await send_category_items(sender, cat_map[text], session["order"], lang)
         return
 
-    # ── DEAL BUILD FLOW (FIX #3) ─────────────────────────
     if stage == "deal_build" and session.get("deal_context"):
         ctx = session["deal_context"]
         if text.startswith("DEAL_PICK_"):
@@ -1207,13 +1165,11 @@ async def _handle_flow_inner(sender, text, is_button=False):
                     next_kind = needs[len(ctx["picks"])]
                     await prompt_deal_pick(sender, session, next_kind, lang)
             return
-        # Fallback — re-prompt current pick
         needs = ctx["needs"]
         if len(ctx["picks"]) < len(needs):
             await prompt_deal_pick(sender, session, needs[len(ctx["picks"])], lang)
         return
 
-    # ── BBQ SIDES FLOW (FIX #10) ─────────────────────────
     if stage == "bbq_sides" and session.get("deal_context"):
         ctx = session["deal_context"]
         if text.startswith("SIDE_"):
@@ -1228,21 +1184,17 @@ async def _handle_flow_inner(sender, text, is_button=False):
         await prompt_bbq_sides(sender, session, lang)
         return
 
-    # ── ITEM ADD ─────────────────────────────────────────
     if text.startswith("ADD_"):
         item_id = text.replace("ADD_", "").upper()
         cat, found_item = find_item(item_id)
         if not found_item:
             return
 
-        # STUCK-STAGE GUARD: if user is tapping a new ADD_ button, they've moved on from
-        # any pending upsell/deal prompt. Clean stale state so we don't drop messages.
         if stage in {"upsell_combo", "upsell_check"}:
             session.pop("_pending_upsell_type", None)
             session["stage"] = "items"
             stage = "items"
 
-        # FIX #2 — DL1 requires burger in cart
         if item_id == "DL1":
             has_burger = any(k.startswith("FF") for k in session["order"])
             if not has_burger:
@@ -1262,7 +1214,6 @@ async def _handle_flow_inner(sender, text, is_button=False):
             await send_qty_control(sender, "DL1", found_item, session["order"], lang)
             return
 
-        # FIX #3 — multi-component deals
         if item_id in ["DL2", "DL3", "DL4", "DL5"]:
             rule = DEAL_RULES[item_id]
             session["stage"] = "deal_build"
@@ -1279,7 +1230,6 @@ async def _handle_flow_inner(sender, text, is_button=False):
             return
 
         if item_id == "DL6":
-            # fixed composition — add directly
             if "DL6" in session["order"]:
                 session["order"]["DL6"]["qty"] += 1
             else:
@@ -1290,7 +1240,6 @@ async def _handle_flow_inner(sender, text, is_button=False):
             await send_qty_control(sender, "DL6", found_item, session["order"], lang)
             return
 
-        # FIX #10 — BBQ items needing 2 sides
         if item_id in BBQ_NEEDS_SIDES:
             if item_id in session["order"]:
                 session["order"][item_id]["qty"] += 1
@@ -1298,7 +1247,6 @@ async def _handle_flow_inner(sender, text, is_button=False):
                 session["stage"] = "qty_control"
                 await send_qty_control(sender, item_id, found_item, session["order"], lang)
                 return
-            # fresh add — trigger sides picker
             session["order"][item_id] = {"item": found_item, "qty": 1, "sides": []}
             session["last_added"] = item_id
             session["stage"] = "bbq_sides"
@@ -1311,7 +1259,6 @@ async def _handle_flow_inner(sender, text, is_button=False):
             await prompt_bbq_sides(sender, session, lang)
             return
 
-        # Normal item add
         if item_id in session["order"]:
             session["order"][item_id]["qty"] += 1
         else:
@@ -1319,7 +1266,6 @@ async def _handle_flow_inner(sender, text, is_button=False):
         session["last_added"] = item_id
         session["stage"] = "qty_control"
 
-        # FIX #2 continued — DL1 pending? attach after burger added
         if (is_burger(item_id)
                 and (session.get("deal_context") or {}).get("deal_id") == "DL1_PENDING"):
             dl1_item = MENU["deals"]["items"]["DL1"]
@@ -1332,11 +1278,9 @@ async def _handle_flow_inner(sender, text, is_button=False):
             await send_qty_control(sender, item_id, found_item, session["order"], lang)
             return
 
-        # FIX #4, #5, #8, #9 — smart upsells
         declined = session.get("upsell_declined_types", set())
         shown = session.get("upsell_shown_for", set())
 
-        # Burger combo upsell: only on FIRST burger, no side/drink already, not declined, not combo-ed
         if (is_burger(item_id)
                 and "burger_combo" not in declined
                 and item_id not in shown
@@ -1344,12 +1288,11 @@ async def _handle_flow_inner(sender, text, is_button=False):
                 and not has_any_drink(session["order"])
                 and "DL1" not in session["order"]):
             burgers_count = sum(1 for k in session["order"] if k.startswith("FF"))
-            if burgers_count == 1:  # this is the first burger
+            if burgers_count == 1:
                 session["upsell_shown_for"].add(item_id)
                 await send_quick_combo_upsell(sender, lang)
                 return
 
-        # Pizza wings upsell: no side, no declined
         if (is_pizza(item_id)
                 and "pizza_wings" not in declined
                 and item_id not in shown
@@ -1362,7 +1305,6 @@ async def _handle_flow_inner(sender, text, is_button=False):
         await send_qty_control(sender, item_id, found_item, session["order"], lang)
         return
 
-    # ── QTY ──────────────────────────────────────────────
     if text in ["QTY_PLUS", "QTY_MINUS"]:
         item_id = session.get("last_added")
         if item_id and item_id in session["order"]:
@@ -1372,7 +1314,6 @@ async def _handle_flow_inner(sender, text, is_button=False):
                 if session["order"][item_id]["qty"] > 1:
                     session["order"][item_id]["qty"] -= 1
                 else:
-                    # FIX #39 — confirm removal, go to menu
                     removed_name = session["order"][item_id]["item"]["name"]
                     del session["order"][item_id]
                     await send_text_message(sender, f"{t(lang, 'removed_item')}: {removed_name}")
@@ -1386,9 +1327,7 @@ async def _handle_flow_inner(sender, text, is_button=False):
             await send_main_menu(sender, session["order"], lang)
         return
 
-    # ── UPSELL ───────────────────────────────────────────
     if text == "SKIP_UPSELL":
-        # FIX #9 — mark specific type declined
         ctx_type = session.get("_pending_upsell_type", "generic")
         session["upsell_declined_types"].add(ctx_type)
         session.pop("_pending_upsell_type", None)
@@ -1413,10 +1352,8 @@ async def _handle_flow_inner(sender, text, is_button=False):
             await send_cart_view(sender, session["order"], lang)
         return
 
-    # ── CHECKOUT ─────────────────────────────────────────
     if text == "CHECKOUT":
         if session["order"]:
-            # FIX #11 — skip dessert upsell if dessert already in cart
             if (has_any_dessert(session["order"])
                     or "dessert" in session.get("upsell_declined_types", set())):
                 session["stage"] = "confirm"
@@ -1433,21 +1370,18 @@ async def _handle_flow_inner(sender, text, is_button=False):
         await send_cart_view(sender, session["order"], lang)
         return
 
-    # ── DESSERT UPSELL ───────────────────────────────────
     if text in ["YES_UPSELL", "NO_UPSELL"]:
         if text == "YES_UPSELL":
             session["stage"] = "items"
             session["current_cat"] = "desserts"
             await send_category_items(sender, "desserts", session["order"], lang)
         else:
-            session["upsell_declined_types"].add("dessert")  # FIX #9
+            session["upsell_declined_types"].add("dessert")
             session["stage"] = "confirm"
             await send_order_summary(sender, session["order"], lang)
         return
 
-    # ── CONFIRM / CANCEL ─────────────────────────────────
     if text == "CONFIRM_ORDER":
-        # FIX #15 — skip name ask if already known
         if session.get("name"):
             session["stage"] = "delivery"
             await send_delivery_buttons(sender, session["name"], lang)
@@ -1461,8 +1395,6 @@ async def _handle_flow_inner(sender, text, is_button=False):
         await send_text_message(sender, t(lang, "cancelled"))
         return
 
-
-    # ✅ DINE-IN OPTION
     if text == "DINE_IN":
         session["delivery_type"] = "dine_in"
         table_num = session.get("table_number", "?")
@@ -1471,16 +1403,13 @@ async def _handle_flow_inner(sender, text, is_button=False):
         await send_payment_buttons(sender, session.get("name", ""), lang)
         return
 
-        # ── DELIVERY / PICKUP ────────────────────────────────
     if text in ["DELIVERY", "PICKUP"]:
         total = get_order_total(session["order"])
         if text == "DELIVERY":
             if total < MIN_DELIVERY_ORDER:
-                # FIX #16 — give add-more option
                 await send_min_order_warning(sender, "delivery", lang)
                 return
             session["delivery_type"] = "delivery"
-            # FIX #15 — skip address if already saved
             if session.get("address"):
                 session["stage"] = "payment"
                 await send_text_message(sender, f"✅ Delivering to: {session['address']}")
@@ -1497,106 +1426,57 @@ async def _handle_flow_inner(sender, text, is_button=False):
             await send_payment_buttons(sender, session.get("name", ""), lang)
         return
 
-import stripe
-
-stripe.api_key = os.getenv("STRIPE_SECRET_KEY")
-STRIPE_PUBLISHABLE_KEY = os.getenv("STRIPE_PUBLISHABLE_KEY")
-
-@app.post("/create-payment-intent")
-async def create_payment_intent(request: Request):
-    """Create Stripe payment intent"""
-    try:
-        data = await request.json()
-        order_id = data.get("order_id")
-        amount = int(data.get("amount") * 100)  # Convert to cents
-        
-        intent = stripe.PaymentIntent.create(
-            amount=amount,
-            currency="usd",
-            metadata={"order_id": order_id}
-        )
-        
-        return {
-            "clientSecret": intent.client_secret,
-            "publishableKey": STRIPE_PUBLISHABLE_KEY
-        }
-    except Exception as e:
-        print(f"Payment error: {e}")
-        return {"error": str(e)}
-
-@app.post("/confirm-payment")
-async def confirm_payment(request: Request):
-    """Confirm payment and update order"""
-    try:
-        data = await request.json()
-        payment_intent_id = data.get("payment_intent_id")
-        order_id = data.get("order_id")
-        
-        # Verify payment
-        intent = stripe.PaymentIntent.retrieve(payment_intent_id)
-        
-        if intent.status == "succeeded":
-            # Update order status
-            if order_id in saved_orders:
-                saved_orders[order_id]["payment_status"] = "paid"
-                saved_orders[order_id]["payment_method"] = "stripe"
-            
-            return {"success": True, "message": "Payment successful"}
-        else:
-            return {"success": False, "message": "Payment failed"}
-    
-    except Exception as e:
-        print(f"Confirmation error: {e}")
-        return {"error": str(e)}
-
-
-    # ── PAYMENT ──────────────────────────────────────────
-    if text in ["CASH", ""CARD_STRIPE", "APPLE_PAY"]:
-        payment_map = {"CASH": t(lang, "cash"), "CARD": t(lang, "card"), "APPLE_PAY": t(lang, "apple_pay")}
+    # ── PAYMENT BLOCK (FIXED: removed extra quote and integrated Stripe logic) ──
+    if text in ["CASH", "CARD_STRIPE", "APPLE_PAY"]:
+        payment_map = {"CASH": t(lang, "cash"), "CARD_STRIPE": t(lang, "card"), "APPLE_PAY": t(lang, "apple_pay")}
         session["payment"] = payment_map[text]
+
+        # If customer chose card, create Stripe Checkout session
+        if text == "CARD_STRIPE":
+            total = get_order_total(session["order"])
+            tax = total * 0.08
+            delivery_charge = get_delivery_fee(total, session.get("delivery_type"))
+            grand_total = total + tax + delivery_charge
+
+            order_id = str(int(time.time()))
+            # Save order temporarily so checkout session can reference it
+            saved_orders[order_id] = {
+                "order": session["order"],
+                "sender": sender,
+                "customer_name": session.get("name", ""),
+                "delivery_type": session.get("delivery_type", ""),
+                "address": session.get("address", ""),
+                "timestamp": time.time()
+            }
+
+            async with aiohttp.ClientSession() as s:
+                async with s.post(
+                    "https://whatsapp-ai-agent-production-e5d7.up.railway.app/create-checkout-session",
+                    json={
+                        "order_id": order_id,
+                        "amount": grand_total
+                    }
+                ) as r:
+                    res = await r.json()
+
+            payment_url = res.get("url")
+            await send_text_message(sender, f"💳 Pay here:\n{payment_url}")
+            # Do NOT mark order as confirmed yet; wait for webhook
+            return
+
+        # For cash and Apple Pay, proceed to final confirmation
         order_id = await send_order_confirmed(sender, session, lang)
         session["order_id"] = order_id
         save_profile(sender, session)
         add_to_order_history(sender, order_id, session["order"])
         await notify_manager(sender, session, order_id)
         await save_to_sheet(sender, session, order_id)
-        # FIX #20 — do NOT wipe session; enter post_order window
         session["stage"] = "post_order"
         session["post_order_at"] = time.time()
         return
 
-if text == "CARD_STRIPE":
-
-    total = get_order_total(session["order"])
-    tax = total * 0.08
-    delivery_charge = get_delivery_fee(total, session.get("delivery_type"))
-    grand_total = total + tax + delivery_charge
-
-    order_id = str(int(time.time()))
-
-    saved_orders[order_id] = {
-        "order": session["order"],
-        "sender": sender
-    }
-
-    async with aiohttp.ClientSession() as s:
-    async with s.post(
-       "https://whatsapp-ai-agent-production-e5d7.up.railway.app/create-checkout-session",
-            json={
-                "order_id": order_id,
-                "amount": grand_total
-            }
-        ) as r:
-            res = await r.json()
-
-    payment_url = res.get("url")
-
-    await send_text_message(sender, f"💳 Pay here:\n{payment_url}")
-    return
-
-    # ── STAGE TEXT ───────────────────────────────────────
     if stage == "get_name":
-        if not is_valid_name(text):  # FIX #14
+        if not is_valid_name(text):
             await send_text_message(sender, t(lang, "invalid_name"))
             return
         session["name"] = text.strip().title()[:30]
@@ -1605,7 +1485,7 @@ if text == "CARD_STRIPE":
         return
 
     if stage == "address":
-        if not is_valid_address(text):  # FIX #18
+        if not is_valid_address(text):
             await send_text_message(sender, t(lang, "invalid_address"))
             return
         session["address"] = text.strip()
@@ -1614,24 +1494,20 @@ if text == "CARD_STRIPE":
         await send_payment_buttons(sender, session.get("name", ""), lang)
         return
 
-    # ── GREETINGS ─────────────────────────────────────────
     if text_lower in ["hi", "hello", "hey", "start", "salam", "hola"]:
         if stage == "lang_select":
             await send_language_selection(sender)
         else:
             session["stage"] = "menu"
-            # FIX #35 — hardcoded greeting, no AI
             await send_text_message(sender, t(lang, "greeting_welcome"))
             await send_main_menu(sender, session["order"], lang)
         return
 
-    # FIX #34 — expand menu match
     if is_menu_request(text_lower):
         session["stage"] = "menu"
         await send_main_menu(sender, session["order"], lang)
         return
 
-    # FIX #32 — exclude ALL checkout stages from category auto-routing
     cat_guess = guess_category(text_lower)
     protected_stages = {"get_name", "address", "payment", "delivery", "confirm",
                          "upsell_check", "upsell_combo", "bbq_sides", "deal_build"}
@@ -1641,40 +1517,30 @@ if text == "CARD_STRIPE":
         await send_category_items(sender, cat_guess, session["order"], lang)
         return
 
-    # ── AI FALLBACK ───────────────────────────────────────
-    # FIX #30 — pass conversation history
-    # FIX #31 — removed auto menu suggestion
     session["conversation"].append({"role": "user", "content": text})
     reply = await get_ai_response(sender, text, lang, session)
     session["conversation"].append({"role": "assistant", "content": reply})
-    session["conversation"] = session["conversation"][-8:]  # last 4 exchanges
+    session["conversation"] = session["conversation"][-8:]
     await send_text_message(sender, reply)
 
 async def handle_order_status(sender, session, lang, text):
-    # Try to extract order number from customer's message first
     order_id = extract_order_number(text)
-
-    # Then fall back to session / lookup
     if not order_id:
         order_id = session.get("order_id")
     if not order_id:
         orders_list = customer_order_lookup.get(sender, [])
         if orders_list:
             order_id = orders_list[-1]
-
     if not order_id:
         await send_text_message(
             sender,
             "I don't see an active order for you. Type *menu* to place a new order! 😊"
         )
         return
-
     order_data = saved_orders.get(order_id)
     customer_name = (order_data or {}).get("customer_name", "")
     greet = f"Hi {customer_name}! " if customer_name else ""
-
     if not order_data:
-        # Order number given but we don't have data — still reassure + escalate
         await send_text_message(
             sender,
             f"{greet}Let me check on order #{order_id} with our team right away! 🔍\n\n"
@@ -1682,15 +1548,11 @@ async def handle_order_status(sender, session, lang, text):
         )
         await notify_manager_status(order_id, sender, reason="Data missing")
         return
-
     elapsed_min = (time.time() - order_data["timestamp"]) / 60
     delivery_type = order_data.get("delivery_type", "pickup")
     expected_max = 45 if delivery_type == "delivery" else 20
     expected_min = 30 if delivery_type == "delivery" else 15
-
     elapsed_int = int(elapsed_min)
-
-    # Case 1: Within expected time range — reassure with accurate ETA
     if elapsed_min < expected_min:
         remaining = expected_min - elapsed_int
         msg = (
@@ -1700,8 +1562,6 @@ async def handle_order_status(sender, session, lang, text):
         )
         await send_text_message(sender, msg)
         return
-
-    # Case 2: Between min and max — approaching delivery
     if elapsed_min < expected_max:
         remaining = expected_max - elapsed_int
         if delivery_type == "delivery":
@@ -1718,8 +1578,6 @@ async def handle_order_status(sender, session, lang, text):
             )
         await send_text_message(sender, msg)
         return
-
-    # Case 3: OVERDUE — apologize, reassure, escalate to manager urgently
     delay = elapsed_int - expected_max
     if delivery_type == "delivery":
         msg = (
@@ -1738,19 +1596,14 @@ async def handle_order_status(sender, session, lang, text):
     await notify_manager_status(order_id, sender, reason=f"OVERDUE by {delay} mins — customer waiting")
 
 async def send_manager_action_list(order_id, customer_number, header_text, body_text, footer_text="Tap action to update customer"):
-    """Send interactive list message to manager with one-tap status actions."""
     url = f"https://graph.facebook.com/v18.0/{WHATSAPP_PHONE_NUMBER_ID}/messages"
     headers = {"Authorization": f"Bearer {WHATSAPP_TOKEN}", "Content-Type": "application/json"}
-
-    # WhatsApp limits: header ≤ 60 chars, body ≤ 1024 chars, footer ≤ 60 chars
     if len(body_text) > 1000:
         body_text = body_text[:997] + "…"
     if len(header_text) > 60:
         header_text = header_text[:59] + "…"
     if len(footer_text) > 60:
         footer_text = footer_text[:59] + "…"
-
-    # IDs encode action so ai-agent can parse and forward to /manager-update
     rows = [
         {
             "id": f"MGR_{order_id}_READY",
@@ -1778,7 +1631,6 @@ async def send_manager_action_list(order_id, customer_number, header_text, body_
             "description": "Cancel this order"
         },
     ]
-
     payload = {
         "messaging_product": "whatsapp",
         "to": MANAGER_NUMBER,
@@ -1803,7 +1655,6 @@ async def send_manager_action_list(order_id, customer_number, header_text, body_
                 resp = await r.text()
                 if r.status >= 400:
                     print(f"❌ Manager list send FAILED {r.status}: {resp[:500]}")
-                    # Fallback — send plain text with typed commands so manager isn't stuck
                     fallback = (
                         f"{body_text}\n\n"
                         f"Reply with:\n"
@@ -1822,18 +1673,16 @@ async def notify_manager(customer_number, session, order_id):
     order = session.get("order", {})
     total = get_order_total(order)
     tax = total * 0.08
-    delivery_charge = get_delivery_fee(total, session.get("delivery_type"))  # FIX #17
+    delivery_charge = get_delivery_fee(total, session.get("delivery_type"))
     grand_total = total + tax + delivery_charge
     order_text = get_order_text(order)
     lang_name = LANG_NAMES.get(session.get("lang", "en"), "English")
-
     location_line = (
         f"📍 Delivery: {session.get('address', '')}"
         if session.get("delivery_type") == "delivery"
         else "🏪 Pickup"
     )
     eta_line = "30-45 mins" if session.get("delivery_type") == "delivery" else "15-20 mins"
-
     body_text = (
         f"🔔 *NEW ORDER #{order_id}*\n\n"
         f"👤 {session.get('name', 'N/A')}\n"
@@ -1848,7 +1697,6 @@ async def notify_manager(customer_number, session, order_id):
         f"💳 {session.get('payment', 'N/A')}\n"
         f"⏱️ ETA: {eta_line}"
     )
-
     await send_manager_action_list(
         order_id=order_id,
         customer_number=customer_number,
@@ -1866,9 +1714,7 @@ async def notify_manager_status(order_id, customer_number, reason="Customer inqu
     elapsed_min = 0
     if order_data.get("timestamp"):
         elapsed_min = int((time.time() - order_data["timestamp"]) / 60)
-
     location_line = f"📍 {address}" if address and delivery_type == "delivery" else "🏪 Pickup"
-
     body_text = (
         f"⚠️ *CUSTOMER WAITING — #{order_id}*\n\n"
         f"👤 {customer_name}\n"
@@ -1878,7 +1724,6 @@ async def notify_manager_status(order_id, customer_number, reason="Customer inqu
         f"{location_line}\n\n"
         f"📢 {reason}"
     )
-
     await send_manager_action_list(
         order_id=order_id,
         customer_number=customer_number,
@@ -1886,8 +1731,6 @@ async def notify_manager_status(order_id, customer_number, reason="Customer inqu
         body_text=body_text,
         footer_text="Tap to update customer now"
     )
-
-# FIX #25 — handle_manager_reply REMOVED. Manager replies live only in ai-agent.
 
 async def send_whatsapp_to_number(to_number, message):
     url = f"https://graph.facebook.com/v18.0/{WHATSAPP_PHONE_NUMBER_ID}/messages"
@@ -1904,10 +1747,9 @@ async def save_to_sheet(customer_number, session, order_id):
     order = session.get("order", {})
     total = get_order_total(order)
     tax = total * 0.08
-    delivery_charge = get_delivery_fee(total, session.get("delivery_type"))  # FIX #17
+    delivery_charge = get_delivery_fee(total, session.get("delivery_type"))
     grand_total = total + tax + delivery_charge
     items_list = [f"{v['item']['name']} x{v['qty']}" for v in order.values()]
-
     data = {
         "order_id": str(order_id),
         "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
@@ -1924,14 +1766,11 @@ async def save_to_sheet(customer_number, session, order_id):
         "language": session.get("lang", "en"),
         "status": "New"
     }
-
     saved_orders[order_id] = {**data, "timestamp": time.time()}
-    # FIX #22 — append to list, not overwrite
     customer_order_lookup.setdefault(customer_number, []).append(order_id)
     customer_order_lookup[customer_number] = customer_order_lookup[customer_number][-10:]
     manager_pending[order_id] = customer_number
     print(f"Order #{order_id} linked to customer {customer_number}")
-
     if GOOGLE_SHEET_WEBHOOK:
         try:
             async with aiohttp.ClientSession() as s:
@@ -1951,13 +1790,10 @@ Hours: 10am-11pm. Delivery min $30 + $4.99 fee (free over $50). Pickup min $10.
 {MENU_SUMMARY}
 {extra_instruction}
 If customer seems confused or stuck, guide them to next step clearly."""
-
-    # FIX #30 — include conversation history
     messages = [{"role": "system", "content": system_prompt}]
     if session and session.get("conversation"):
         messages.extend(session["conversation"][-6:])
     messages.append({"role": "user", "content": user_message})
-
     headers = {"Authorization": f"Bearer {GROQ_API_KEY}", "Content-Type": "application/json"}
     payload = {
         "model": "llama-3.1-8b-instant",
@@ -1972,7 +1808,6 @@ If customer seems confused or stuck, guide them to next step clearly."""
                 return result["choices"][0]["message"]["content"]
     except Exception as e:
         print(f"AI Error: {e}")
-        # Fallback in customer's language
         return t(lang, "greeting_welcome")
 
 async def send_language_selection(sender):
@@ -1996,7 +1831,7 @@ async def send_language_selection(sender):
                     {"id": "LANG_RU", "title": "🇷🇺 Русский", "description": "Продолжить на русском"},
                     {"id": "LANG_ZH", "title": "🇨🇳 中文", "description": "继续中文"},
                     {"id": "LANG_ML", "title": "🇮🇳 Malayalam", "description": "മലയാളം"},
-                ]}]
+                ]}]}
             }
         }
     }
@@ -2012,7 +1847,6 @@ async def send_main_menu(sender, current_order=None, lang="en"):
     if current_order:
         count = sum(v["qty"] for v in current_order.values())
         cart_text = f"\n\n🛒 {count} item(s) — ${total:.2f}"
-
     url = f"https://graph.facebook.com/v18.0/{WHATSAPP_PHONE_NUMBER_ID}/messages"
     headers = {"Authorization": f"Bearer {WHATSAPP_TOKEN}", "Content-Type": "application/json"}
     payload = {
@@ -2025,7 +1859,6 @@ async def send_main_menu(sender, current_order=None, lang="en"):
             "action": {
                 "button": t(lang, "browse"),
                 "sections": [
-                    # FIX #33 — clearer category descriptions
                     {"title": "Start Here", "rows": [
                         {"id": "CAT_DEALS", "title": "Deals (Best Value)", "description": "Combo meals & bundles"},
                     ]},
@@ -2056,7 +1889,6 @@ async def send_category_items(sender, cat_key, current_order, lang="en"):
     rows = []
     for item_id, item in cat["items"].items():
         in_cart = current_order.get(item_id, {}).get("qty", 0)
-        # FIX #7 — safe title truncation; move qty indicator to description
         title_base = f"{item['emoji']} {item['name']}"
         title = truncate_title(title_base, 24)
         desc_prefix = f"✓ In cart x{in_cart} · " if in_cart else ""
@@ -2068,7 +1900,6 @@ async def send_category_items(sender, cat_key, current_order, lang="en"):
             "title": title,
             "description": desc_text
         })
-
     url = f"https://graph.facebook.com/v18.0/{WHATSAPP_PHONE_NUMBER_ID}/messages"
     headers = {"Authorization": f"Bearer {WHATSAPP_TOKEN}", "Content-Type": "application/json"}
     payload = {
@@ -2087,12 +1918,10 @@ async def send_category_items(sender, cat_key, current_order, lang="en"):
             print(f"Category sent: {cat_key}")
 
 async def send_qty_control(sender, item_id, item, order, lang="en"):
-    # FIX #6 — ONE message only; Checkout button included directly
     qty = order.get(item_id, {}).get("qty", 1)
     subtotal = item["price"] * qty
     total = get_order_total(order)
     order_text = get_order_text(order)
-
     body_text = (
         f"*{item['name']}*\n"
         f"Qty: {qty} x ${item['price']:.2f} = *${subtotal:.2f}*\n\n"
@@ -2101,7 +1930,6 @@ async def send_qty_control(sender, item_id, item, order, lang="en"):
     )
     if len(body_text) > 1000:
         body_text = body_text[:997] + "…"
-
     url = f"https://graph.facebook.com/v18.0/{WHATSAPP_PHONE_NUMBER_ID}/messages"
     headers = {"Authorization": f"Bearer {WHATSAPP_TOKEN}", "Content-Type": "application/json"}
     payload = {
@@ -2124,7 +1952,6 @@ async def send_qty_control(sender, item_id, item, order, lang="en"):
                 resp = await r.text()
                 if r.status >= 400:
                     print(f"❌ send_qty_control FAILED {r.status}: {resp[:500]}")
-                    # Fallback: send cart view instead so customer isn't stuck
                     await send_cart_view(sender, order, lang)
     except Exception as e:
         print(f"❌ send_qty_control EXCEPTION: {e}")
@@ -2133,7 +1960,7 @@ async def send_qty_control(sender, item_id, item, order, lang="en"):
 async def send_quick_combo_upsell(sender, lang="en"):
     session = get_session(sender)
     session["stage"] = "upsell_combo"
-    session["_pending_upsell_type"] = "burger_combo"  # FIX #9
+    session["_pending_upsell_type"] = "burger_combo"
     url = f"https://graph.facebook.com/v18.0/{WHATSAPP_PHONE_NUMBER_ID}/messages"
     headers = {"Authorization": f"Bearer {WHATSAPP_TOKEN}", "Content-Type": "application/json"}
     payload = {
@@ -2156,7 +1983,7 @@ async def send_quick_combo_upsell(sender, lang="en"):
 async def send_quick_upsell(sender, item_id, message, lang="en", upsell_type="generic"):
     session = get_session(sender)
     session["stage"] = "upsell_combo"
-    session["_pending_upsell_type"] = upsell_type  # FIX #9
+    session["_pending_upsell_type"] = upsell_type
     url = f"https://graph.facebook.com/v18.0/{WHATSAPP_PHONE_NUMBER_ID}/messages"
     headers = {"Authorization": f"Bearer {WHATSAPP_TOKEN}", "Content-Type": "application/json"}
     payload = {
@@ -2176,7 +2003,6 @@ async def send_quick_upsell(sender, item_id, message, lang="en", upsell_type="ge
 
 async def send_dessert_upsell(sender, order, lang="en"):
     total = get_order_total(order)
-    # FIX #12 — build from MENU so it works for every language
     ds = MENU["desserts"]["items"]
     dessert_line = " | ".join([f"{v['emoji']} {v['name']} ${v['price']:.2f}" for v in list(ds.values())[:3]])
     url = f"https://graph.facebook.com/v18.0/{WHATSAPP_PHONE_NUMBER_ID}/messages"
@@ -2227,14 +2053,12 @@ async def send_cart_view(sender, order, lang="en"):
 async def send_order_summary(sender, order, lang="en"):
     total = get_order_total(order)
     tax = total * 0.08
-    # FIX #13 — disclose potential delivery fee up front
     if total >= FREE_DELIVERY_THRESHOLD:
         delivery_note = "\n" + t(lang, "delivery_note_free")
     else:
         delivery_note = "\n" + t(lang, "delivery_note_will_add")
     grand_total = total + tax
     order_text = get_order_text(order)
-
     body_text = (
         f"{order_text}\n\n"
         f"{t(lang, 'subtotal')} ${total:.2f}\n"
@@ -2244,7 +2068,6 @@ async def send_order_summary(sender, order, lang="en"):
     )
     if len(body_text) > 1000:
         body_text = body_text[:997] + "…"
-
     url = f"https://graph.facebook.com/v18.0/{WHATSAPP_PHONE_NUMBER_ID}/messages"
     headers = {"Authorization": f"Bearer {WHATSAPP_TOKEN}", "Content-Type": "application/json"}
     payload = {
@@ -2268,11 +2091,8 @@ async def send_order_summary(sender, order, lang="en"):
 async def send_delivery_buttons(sender, name, lang="en"):
     session = get_session(sender)
     table_num = session.get("table_number")
-    
     url = f"https://graph.facebook.com/v18.0/{WHATSAPP_PHONE_NUMBER_ID}/messages"
     headers = {"Authorization": f"Bearer {WHATSAPP_TOKEN}", "Content-Type": "application/json"}
-    
-    # ✅ DINE-IN KE LIYE ALAG BUTTONS
     if table_num:
         body_text = f"Hey {name}! You're at Table {table_num} 🍽️\n\nReady to order?"
         buttons = [
@@ -2285,7 +2105,6 @@ async def send_delivery_buttons(sender, name, lang="en"):
             {"type": "reply", "reply": {"id": "DELIVERY", "title": safe_btn(t(lang, "delivery"))}},
             {"type": "reply", "reply": {"id": "PICKUP", "title": safe_btn(t(lang, "pickup"))}},
         ]
-    
     payload = {
         "messaging_product": "whatsapp", "to": sender, "type": "interactive",
         "interactive": {
@@ -2301,11 +2120,9 @@ async def send_delivery_buttons(sender, name, lang="en"):
             _ = await r.text()
 
 async def send_min_order_warning(sender, dtype, lang="en"):
-    # FIX #16 — min-order warning with Add More + alt option
     key = "min_delivery" if dtype == "delivery" else "min_pickup"
     alt_id = "PICKUP" if dtype == "delivery" else "DELIVERY"
     alt_label = t(lang, "pickup") if dtype == "delivery" else t(lang, "delivery")
-
     url = f"https://graph.facebook.com/v18.0/{WHATSAPP_PHONE_NUMBER_ID}/messages"
     headers = {"Authorization": f"Bearer {WHATSAPP_TOKEN}", "Content-Type": "application/json"}
     payload = {
@@ -2335,7 +2152,7 @@ async def send_payment_buttons(sender, name, lang="en"):
             "footer": {"text": "100% Secure"},
             "action": {"buttons": [
                 {"type": "reply", "reply": {"id": "CASH", "title": safe_btn(t(lang, "cash"))}},
-                {"type": "reply", "reply": {"id": "CARD", "title": safe_btn(t(lang, "card"))}},
+                {"type": "reply", "reply": {"id": "CARD_STRIPE", "title": safe_btn(t(lang, "card"))}},
                 {"type": "reply", "reply": {"id": "APPLE_PAY", "title": safe_btn(t(lang, "apple_pay"))}},
             ]}
         }
@@ -2343,8 +2160,6 @@ async def send_payment_buttons(sender, name, lang="en"):
     async with aiohttp.ClientSession() as s:
         async with s.post(url, json=payload, headers=headers) as r:
             _ = await r.text()
-
-    # FIX #19 — separate Back button
     back_payload = {
         "messaging_product": "whatsapp", "to": sender, "type": "interactive",
         "interactive": {
@@ -2363,17 +2178,14 @@ async def send_order_confirmed(sender, session_data, lang="en"):
     order = session_data.get("order", {})
     total = get_order_total(order)
     tax = total * 0.08
-    delivery_charge = get_delivery_fee(total, session_data.get("delivery_type"))  # FIX #17
+    delivery_charge = get_delivery_fee(total, session_data.get("delivery_type"))
     grand_total = total + tax + delivery_charge
     order_text = get_order_text(order)
     delivery_type = session_data.get("delivery_type", "pickup")
-
-    # FIX #21 — guarantee unique order_id
     while True:
         order_id = random.randint(10000, 99999)
         if order_id not in saved_orders:
             break
-
     if delivery_type == "dine_in":
         table_num = session_data.get("table_number", "?")
         location_text = f"🍽️ Table {table_num}"
@@ -2381,23 +2193,16 @@ async def send_order_confirmed(sender, session_data, lang="en"):
     else:
         eta = "30-45 minutes" if delivery_type == "delivery" else "15-20 minutes"
         location_text = f"{'Delivery: ' + session_data.get('address', '') if delivery_type == 'delivery' else 'Store Pickup'}"
-    
     delivery_fee_line = f"\n{t(lang, 'delivery_charge')} ${delivery_charge:.2f}" if delivery_charge > 0 else ""
-
     msg = f"""{t(lang, 'order_confirmed')}, {session_data.get('name', 'Customer')}! #{order_id}*
-
 {order_text}
-
 {t(lang, 'subtotal')} ${total:.2f}
 {t(lang, 'tax')} ${tax:.2f}{delivery_fee_line}
 {t(lang, 'grand_total')} ${grand_total:.2f}*
-
 {location_text}
 Payment: {session_data.get('payment', '')}
 {t(lang, 'ready_in')} *{eta}*
-
 {t(lang, 'thank_you')}"""
-
     await send_text_message(sender, msg)
     return order_id
 
@@ -2446,11 +2251,9 @@ async def send_repeat_order_confirm(sender, last_items, address, lang="en"):
             _ = await r.text()
             print("Repeat order confirm sent")
 
-# ── DEAL FLOW HELPERS (FIX #3) ─────────────────────────────
 async def prompt_deal_pick(sender, session, kind, lang="en"):
     ctx = session["deal_context"]
     deal_id = ctx["deal_id"]
-
     if kind == "burger":
         cat_key = "fastfood"
         prompt_key = "choose_burger_deal"
@@ -2462,7 +2265,6 @@ async def prompt_deal_pick(sender, session, kind, lang="en"):
         else:
             prompt_key = "choose_pizza_deal"
     elif kind == "2sides":
-        # DL5: use same sides picker as BBQ
         session["stage"] = "bbq_sides"
         ctx["sides_needed"] = 2
         ctx.setdefault("sides", [])
@@ -2470,7 +2272,6 @@ async def prompt_deal_pick(sender, session, kind, lang="en"):
         return
     else:
         return
-
     cat = MENU[cat_key]
     rows = []
     for item_id, item in cat["items"].items():
@@ -2483,7 +2284,6 @@ async def prompt_deal_pick(sender, session, kind, lang="en"):
             "title": title,
             "description": desc,
         })
-
     url = f"https://graph.facebook.com/v18.0/{WHATSAPP_PHONE_NUMBER_ID}/messages"
     headers = {"Authorization": f"Bearer {WHATSAPP_TOKEN}", "Content-Type": "application/json"}
     payload = {
@@ -2505,18 +2305,13 @@ async def finalize_deal(sender, session, lang="en"):
     deal_id = ctx["deal_id"]
     deal_item = ctx["deal_item"]
     components = [p["name"] for p in ctx.get("picks", [])]
-
-    # Deal-specific extras
     if deal_id == "DL2":
         components = components + ["Fries", "Soda"]
     elif deal_id == "DL3":
         components = components + ["6 Wings"]
     elif deal_id == "DL4":
         components = components + ["2 Sodas"]
-
     order_entry = {"item": deal_item, "qty": 1, "components": components}
-
-    # Unique key so multiple deals don't collide
     key = deal_id
     n = 1
     while key in session["order"]:
@@ -2524,13 +2319,11 @@ async def finalize_deal(sender, session, lang="en"):
         key = f"{deal_id}#{n}"
     session["order"][key] = order_entry
     session["last_added"] = key
-
     session["deal_context"] = None
     session["stage"] = "qty_control"
     await send_text_message(sender, t(lang, "deal_added"))
     await send_qty_control(sender, key, deal_item, session["order"], lang)
 
-# ── BBQ SIDES HELPERS (FIX #10) ────────────────────────────
 async def prompt_bbq_sides(sender, session, lang="en"):
     ctx = session["deal_context"]
     picked_so_far = ctx.get("sides", [])
@@ -2538,7 +2331,6 @@ async def prompt_bbq_sides(sender, session, lang="en"):
     remaining = needed - len(picked_so_far)
     prompt_key = "pick_ribs_sides" if ctx.get("deal_id") == "DL5" else "pick_bbq_sides"
     progress = f" ({len(picked_so_far)}/{needed} picked)" if picked_so_far else ""
-
     url = f"https://graph.facebook.com/v18.0/{WHATSAPP_PHONE_NUMBER_ID}/messages"
     headers = {"Authorization": f"Bearer {WHATSAPP_TOKEN}", "Content-Type": "application/json"}
     rows = [
@@ -2564,9 +2356,7 @@ async def prompt_bbq_sides(sender, session, lang="en"):
 async def finalize_bbq_sides(sender, session, lang="en"):
     ctx = session["deal_context"]
     sides = ctx.get("sides", [])
-
     if ctx.get("deal_id") == "DL5":
-        # Ribs Night Deal
         deal_item = MENU["deals"]["items"]["DL5"]
         components = ["Half Rack Ribs"] + sides + ["Soda"]
         key = "DL5"
@@ -2581,8 +2371,6 @@ async def finalize_bbq_sides(sender, session, lang="en"):
         await send_text_message(sender, t(lang, "deal_added"))
         await send_qty_control(sender, key, deal_item, session["order"], lang)
         return
-
-    # Plain BBQ item with sides
     target_id = ctx.get("target_item_id")
     if target_id and target_id in session["order"]:
         session["order"][target_id]["sides"] = sides
@@ -2610,22 +2398,18 @@ async def send_text_message(to, message):
 
 @app.post("/manager-update")
 async def manager_update(request: Request):
-    """Receive manager order status updates from AI agent"""
     data = await request.json()
     order_id_str = str(data.get("order_id", ""))
     status = data.get("status", "").upper()
     print(f"Manager update: Order #{order_id_str} -> {status}")
-
     try:
         order_id = int(order_id_str)
         customer_number = manager_pending.get(order_id)
         if not customer_number:
             print(f"No customer for order #{order_id}")
             return {"status": "not_found"}
-
         order_data = saved_orders.get(order_id, {})
         customer_name = order_data.get("customer_name", "Customer")
-
         if "READY" in status and "DELIVERY" not in status:
             if order_data.get("delivery_type") == "pickup":
                 msg = f"Great news, {customer_name}! Your order #{order_id} is *READY for pickup!* Please come collect it"
@@ -2634,7 +2418,6 @@ async def manager_update(request: Request):
         elif "OUT FOR DELIVERY" in status or "ON THE WAY" in status:
             msg = f"Hey {customer_name}! Your order #{order_id} is *on the way!* Should arrive in 15-20 minutes!"
         elif "DELAYED" in status:
-            # Support both "DELAYED 15" (typed) and "DELAYED15" (button id)
             delay_match = re.search(r'DELAYED\s*(\d+)', status)
             delay_time = delay_match.group(1) + " minutes" if delay_match else "a little longer"
             msg = f"Hi {customer_name}, your order #{order_id} will take *{delay_time}* more than expected. Sorry for the wait! 🙏"
@@ -2642,11 +2425,8 @@ async def manager_update(request: Request):
             msg = f"Hi {customer_name}, unfortunately order #{order_id} has been *cancelled*. Please contact us for a refund."
         else:
             msg = f"Update on your order #{order_id}: {status}"
-
         await send_whatsapp_to_number(str(customer_number), msg)
         print(f"Customer {customer_number} updated for order #{order_id}")
-
-        # Send confirmation back to manager so they know the tap was received
         try:
             status_label = status
             if "READY" in status and "DELIVERY" not in status:
@@ -2662,42 +2442,36 @@ async def manager_update(request: Request):
             await send_whatsapp_to_number(MANAGER_NUMBER, confirm_msg)
         except Exception as e:
             print(f"Manager confirmation send failed: {e}")
-
         return {"status": "ok"}
     except Exception as e:
         print(f"Manager update error: {e}")
         return {"status": "error"}
 
-
 @app.post("/stripe-webhook")
 async def stripe_webhook(request: Request):
-
     payload = await request.body()
     sig_header = request.headers.get("stripe-signature")
-
+    endpoint_secret = STRIPE_WEBHOOK_SECRET
+    if not endpoint_secret:
+        print("Stripe webhook secret missing")
+        return {"status": "error", "message": "Webhook secret not configured"}
     try:
         event = stripe.Webhook.construct_event(
             payload, sig_header, endpoint_secret
         )
-    except Exception:
+    except Exception as e:
+        print(f"Stripe webhook error: {e}")
         raise HTTPException(status_code=400, detail="Webhook error")
-
-    # ✅ event type check
     if event["type"] == "checkout.session.completed":
         session = event["data"]["object"]
-
         order_id = session.get("metadata", {}).get("order_id")
-
         if order_id and order_id in saved_orders:
             sender = saved_orders[order_id]["sender"]
-
             await send_text_message(
                 sender,
                 "✅ Payment received!\nOrder confirmed 🎉"
             )
-
     return {"status": "ok"}
-
 
 @app.post("/twilio-call")
 async def twilio_call(request: Request):
