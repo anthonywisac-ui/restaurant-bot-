@@ -32,7 +32,7 @@ LANG_NAMES = {
     "zh": "Chinese", "ml": "Malayalam",
 }
 
-# Menu summary (used in AI prompt)
+# Menu summary
 MENU_SUMMARY = """
 Wild Bites Restaurant Menu (US):
 Deals, Burgers, Pizza, BBQ, Fish, Drinks, Sides, Desserts

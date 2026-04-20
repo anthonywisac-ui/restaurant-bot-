@@ -9,11 +9,11 @@ import aiohttp
 import re
 import traceback
 
-from .config import VERIFY_TOKEN, WHATSAPP_TOKEN, WHATSAPP_PHONE_NUMBER_ID, STRIPE_SECRET_KEY
-from .db import customer_sessions, saved_orders
-from .flow import handle_flow, new_session
-from .stripe_utils import handle_stripe_webhook
-from .whatsapp_handlers import send_language_selection, send_text_message
+from config import VERIFY_TOKEN, WHATSAPP_TOKEN, WHATSAPP_PHONE_NUMBER_ID, STRIPE_SECRET_KEY
+from db import customer_sessions, saved_orders
+from flow import handle_flow, new_session
+from stripe_utils import handle_stripe_webhook
+from whatsapp_handlers import send_language_selection, send_text_message
 
 stripe.api_key = STRIPE_SECRET_KEY
 
