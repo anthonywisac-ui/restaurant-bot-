@@ -1627,44 +1627,51 @@ async def handle_order_status(sender, session, lang, text):
     await notify_manager_status(order_id, sender, reason=f"OVERDUE by {delay} mins — customer waiting")
 
 async def send_manager_action_list(order_id, customer_number, header_text, body_text, footer_text="Tap action to update customer"):
-    """Send interactive list message to manager with one-tap status actions."""
+    """Send interactive list message to manager with one-tap status actions.
+
+    Meta is strict about interactive payloads. We keep:
+    - header ≤ 60 chars (ASCII-safe)
+    - body ≤ 1024 chars
+    - footer ≤ 60 chars
+    - row titles ≤ 24 chars (no emoji in titles to avoid char-counting edge cases)
+    - row descriptions ≤ 72 chars
+    - max 10 rows per section
+    """
     url = f"https://graph.facebook.com/v18.0/{WHATSAPP_PHONE_NUMBER_ID}/messages"
     headers = {"Authorization": f"Bearer {WHATSAPP_TOKEN}", "Content-Type": "application/json"}
 
-    # WhatsApp limits: header ≤ 60 chars, body ≤ 1024 chars, footer ≤ 60 chars
+    # Truncate defensively
+    header_text = (header_text or "")[:60]
+    footer_text = (footer_text or "")[:60]
     if len(body_text) > 1000:
         body_text = body_text[:997] + "…"
-    if len(header_text) > 60:
-        header_text = header_text[:59] + "…"
-    if len(footer_text) > 60:
-        footer_text = footer_text[:59] + "…"
 
-    # IDs encode action so ai-agent can parse and forward to /manager-update
+    # Row titles: ASCII-only, max 24 chars. Emojis moved to descriptions.
     rows = [
         {
             "id": f"MGR_{order_id}_READY",
-            "title": "✅ Ready",
-            "description": "Food is ready (pickup) / out for delivery"
+            "title": "Ready",
+            "description": "✅ Order ready for pickup / delivery"
         },
         {
             "id": f"MGR_{order_id}_OUTFORDELIVERY",
-            "title": "🚚 Out for Delivery",
-            "description": "Driver on the way to customer"
+            "title": "Out for Delivery",
+            "description": "🚚 Driver on the way to customer"
         },
         {
             "id": f"MGR_{order_id}_DELAYED15",
-            "title": "⏱️ Delayed 15 min",
-            "description": "Needs 15 more minutes"
+            "title": "Delayed 15 min",
+            "description": "⏱️ Needs 15 more minutes"
         },
         {
             "id": f"MGR_{order_id}_DELAYED30",
-            "title": "⏱️ Delayed 30 min",
-            "description": "Needs 30 more minutes"
+            "title": "Delayed 30 min",
+            "description": "⏱️ Needs 30 more minutes"
         },
         {
             "id": f"MGR_{order_id}_CANCELLED",
-            "title": "❌ Cancelled",
-            "description": "Cancel this order"
+            "title": "Cancelled",
+            "description": "❌ Cancel this order"
         },
     ]
 
@@ -1680,32 +1687,49 @@ async def send_manager_action_list(order_id, customer_number, header_text, body_
             "action": {
                 "button": "Update Status",
                 "sections": [{
-                    "title": f"Order #{order_id}",
+                    "title": f"Order #{order_id}"[:24],
                     "rows": rows
                 }]
             }
         }
     }
+
+    print(f"📤 Sending manager list for #{order_id} to +{MANAGER_NUMBER}")
     try:
         async with aiohttp.ClientSession() as s:
-            async with s.post(url, json=payload, headers=headers) as r:
+            async with s.post(url, json=payload, headers=headers, timeout=aiohttp.ClientTimeout(total=15)) as r:
                 resp = await r.text()
                 if r.status >= 400:
-                    print(f"❌ Manager list send FAILED {r.status}: {resp[:500]}")
-                    # Fallback — send plain text with typed commands so manager isn't stuck
+                    print(f"❌ Manager list FAILED {r.status}: {resp[:800]}")
+                    # Fallback — send PLAIN TEXT with typed commands so manager isn't stuck
                     fallback = (
                         f"{body_text}\n\n"
-                        f"Reply with:\n"
+                        f"━━━━━━━━━━━━━━━━━\n"
+                        f"Reply with one of:\n"
                         f"ORDER#{order_id} READY\n"
                         f"ORDER#{order_id} OUT FOR DELIVERY\n"
                         f"ORDER#{order_id} DELAYED 15\n"
                         f"ORDER#{order_id} CANCELLED"
                     )
                     await send_whatsapp_to_number(MANAGER_NUMBER, fallback)
+                    print(f"📤 Fallback text sent for #{order_id}")
                 else:
-                    print(f"Manager interactive list sent for #{order_id}")
+                    print(f"✅ Manager list sent for #{order_id} (status {r.status})")
     except Exception as e:
-        print(f"❌ Manager list exception: {e}")
+        print(f"❌ Manager list EXCEPTION: {e}\n{traceback.format_exc()}")
+        # Final fallback — plain text
+        try:
+            fallback = (
+                f"🔔 Order #{order_id} needs attention!\n\n"
+                f"Reply with:\n"
+                f"ORDER#{order_id} READY\n"
+                f"ORDER#{order_id} OUT FOR DELIVERY\n"
+                f"ORDER#{order_id} DELAYED 15\n"
+                f"ORDER#{order_id} CANCELLED"
+            )
+            await send_whatsapp_to_number(MANAGER_NUMBER, fallback)
+        except Exception as e2:
+            print(f"❌ Even fallback failed: {e2}")
 
 async def notify_manager(customer_number, session, order_id):
     order = session.get("order", {})
