@@ -1,7 +1,7 @@
 import stripe
-from .config import STRIPE_SECRET_KEY, STRIPE_WEBHOOK_SECRET
-from .db import saved_orders
-from .whatsapp_handlers import send_text_message
+from config import STRIPE_SECRET_KEY, STRIPE_WEBHOOK_SECRET
+from db import saved_orders
+from whatsapp_handlers import send_text_message
 import time
 
 stripe.api_key = STRIPE_SECRET_KEY

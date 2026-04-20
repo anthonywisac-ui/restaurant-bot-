@@ -1,22 +1,22 @@
 # flow.py - Complete conversation logic for restaurant bot
 import time
 import random
-from .db import (
+from db import (
     customer_sessions, saved_orders, customer_profiles,
     customer_order_lookup, manager_pending
 )
-from .config import (
+from config import (
     POST_ORDER_WINDOW, MIN_DELIVERY_ORDER, MIN_PICKUP_ORDER,
     LANG_NAMES, FREE_DELIVERY_THRESHOLD, DELIVERY_CHARGE
 )
-from .strings import t
-from .utils import (
+from strings import t
+from utils import (
     get_order_total, get_delivery_fee, get_order_text, find_item,
     is_burger, is_pizza, has_any_side, has_any_drink, has_any_dessert,
     is_valid_name, is_valid_address, is_order_status_query, is_thanks, is_bye,
     is_menu_request, guess_category, extract_order_number, truncate_title, safe_btn
 )
-from .whatsapp_handlers import (
+from whatsapp_handlers import (
     send_text_message, send_language_selection, send_main_menu,
     send_category_items, send_qty_control, send_cart_view,
     send_order_summary, send_delivery_buttons, send_payment_buttons,
@@ -24,10 +24,10 @@ from .whatsapp_handlers import (
     send_dessert_upsell, send_min_order_warning, send_returning_customer_menu,
     send_repeat_order_confirm, send_manager_action_list, send_whatsapp_to_number
 )
-from .stripe_utils import create_stripe_checkout_session
-from .ai_utils import get_ai_response
-from .menu_data import MENU
-from . import utils  # for any remaining utils not directly imported
+from stripe_utils import create_stripe_checkout_session
+from ai_utils import get_ai_response
+from menu_data import MENU
+from  import utils  # for any remaining utils not directly imported
 
 # Global constants that were originally in main.py
 DEAL_RULES = {
@@ -163,7 +163,7 @@ async def prompt_deal_pick(sender, session, kind, lang="en"):
     # But we already have send_text_message etc. Let's use a generic function that we will add to whatsapp_handlers later.
     # For now, I'll keep the original code with direct aiohttp.
     import aiohttp
-    from .config import WHATSAPP_TOKEN, WHATSAPP_PHONE_NUMBER_ID
+    from config import WHATSAPP_TOKEN, WHATSAPP_PHONE_NUMBER_ID
     url = f"https://graph.facebook.com/v18.0/{WHATSAPP_PHONE_NUMBER_ID}/messages"
     headers = {"Authorization": f"Bearer {WHATSAPP_TOKEN}", "Content-Type": "application/json"}
     payload = {
@@ -212,7 +212,7 @@ async def prompt_bbq_sides(sender, session, lang="en"):
     prompt_key = "pick_ribs_sides" if ctx.get("deal_id") == "DL5" else "pick_bbq_sides"
     progress = f" ({len(picked_so_far)}/{needed} picked)" if picked_so_far else ""
     import aiohttp
-    from .config import WHATSAPP_TOKEN, WHATSAPP_PHONE_NUMBER_ID
+    from config import WHATSAPP_TOKEN, WHATSAPP_PHONE_NUMBER_ID
     url = f"https://graph.facebook.com/v18.0/{WHATSAPP_PHONE_NUMBER_ID}/messages"
     headers = {"Authorization": f"Bearer {WHATSAPP_TOKEN}", "Content-Type": "application/json"}
     rows = [
@@ -934,7 +934,7 @@ async def notify_manager_status(order_id, customer_number, reason="Customer inqu
 # ========== Save to sheet ==========
 async def save_to_sheet(customer_number, session, order_id):
     import aiohttp
-    from .config import GOOGLE_SHEET_WEBHOOK
+    from config import GOOGLE_SHEET_WEBHOOK
     order = session.get("order", {})
     total = get_order_total(order)
     tax = total * 0.08

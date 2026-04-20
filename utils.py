@@ -1,7 +1,7 @@
 import re
 import time
-from .config import FREE_DELIVERY_THRESHOLD, DELIVERY_CHARGE
-from .strings import t
+from config import FREE_DELIVERY_THRESHOLD, DELIVERY_CHARGE
+from strings import t
 
 def get_order_total(order):
     return sum(v["item"]["price"] * v["qty"] for v in order.values())

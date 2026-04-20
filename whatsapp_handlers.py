@@ -1,11 +1,11 @@
 import aiohttp
 import random
 import time
-from .config import WHATSAPP_TOKEN, WHATSAPP_PHONE_NUMBER_ID, LANG_NAMES
-from .strings import t
-from .utils import safe_btn, truncate_title, get_order_total, get_order_text
-from .menu_data import MENU
-from .db import customer_sessions, saved_orders
+from config import WHATSAPP_TOKEN, WHATSAPP_PHONE_NUMBER_ID, LANG_NAMES
+from strings import t
+from utils import safe_btn, truncate_title, get_order_total, get_order_text
+from menu_data import MENU
+from db import customer_sessions, saved_orders
 
 async def send_text_message(to, message):
     url = f"https://graph.facebook.com/v18.0/{WHATSAPP_PHONE_NUMBER_ID}/messages"
