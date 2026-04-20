@@ -1,0 +1,3 @@
+[build]
+# Disable Docker secrets for build - use environment variables instead
+# This prevents Railpack from trying to mount non-existent secrets
