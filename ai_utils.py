@@ -1,7 +1,6 @@
 import aiohttp
-from config import GROQ_API_KEY, MENU_SUMMARY
+from config import GROQ_API_KEY, LANG_NAMES, MENU_SUMMARY
 from strings import t
-from utils import LANG_NAMES
 
 async def get_ai_response(sender, user_message, lang="en", session=None, extra_instruction=""):
     lang_name = LANG_NAMES.get(lang, "English")

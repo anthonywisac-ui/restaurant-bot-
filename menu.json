@@ -19,6 +19,67 @@
       "FF4": {"name": "Veggie Delight Burger", "price": 10.99, "emoji": "🥬", "desc": "Plant-based patty, avocado"},
       "FF5": {"name": "Spicy Jalapeno Burger", "price": 13.99, "emoji": "🌶️", "desc": "Beef patty, jalapenos, pepper jack"}
     }
+  },
+  "pizza": {
+    "name": "🍕 Pizza (12 inch)",
+    "items": {
+      "PZ1": {"name": "Margherita Classic", "price": 13.99, "emoji": "🍕", "desc": "Fresh mozzarella, tomato, basil"},
+      "PZ2": {"name": "BBQ Chicken Pizza", "price": 15.99, "emoji": "🍗", "desc": "Grilled chicken, BBQ sauce"},
+      "PZ3": {"name": "Meat Lovers Supreme", "price": 17.99, "emoji": "🥩", "desc": "Pepperoni, sausage, beef, bacon"},
+      "PZ4": {"name": "Veggie Garden Pizza", "price": 14.99, "emoji": "🥦", "desc": "Bell peppers, mushrooms, olives"},
+      "PZ5": {"name": "Buffalo Chicken Pizza", "price": 16.99, "emoji": "🔥", "desc": "Buffalo sauce, chicken, ranch"}
+    }
+  },
+  "bbq": {
+    "name": "🍖 BBQ",
+    "items": {
+      "BB1": {"name": "Half Rack Ribs", "price": 18.99, "emoji": "🍖", "desc": "Smoky ribs, BBQ glaze + 2 sides"},
+      "BB2": {"name": "Full Rack Ribs", "price": 29.99, "emoji": "🍖", "desc": "Full rack + 2 sides"},
+      "BB3": {"name": "Pulled Pork Sandwich", "price": 12.99, "emoji": "🥪", "desc": "Slow-cooked pork, slaw, BBQ"},
+      "BB4": {"name": "Smoked Brisket Plate", "price": 19.99, "emoji": "🥩", "desc": "Sliced brisket + 2 sides"},
+      "BB5": {"name": "BBQ Chicken Plate", "price": 16.99, "emoji": "🍗", "desc": "BBQ chicken + 2 sides"}
+    }
+  },
+  "fish": {
+    "name": "🐟 Fish & Seafood",
+    "items": {
+      "FS1": {"name": "Fish & Chips (Cod)", "price": 15.99, "emoji": "🐟", "desc": "Beer-battered cod, fries, tartar"},
+      "FS2": {"name": "Blackened Salmon Plate", "price": 19.99, "emoji": "🍣", "desc": "Rice + salad, lemon butter"},
+      "FS3": {"name": "Shrimp Basket", "price": 16.99, "emoji": "🍤", "desc": "Crispy shrimp, fries, cocktail sauce"},
+      "FS4": {"name": "Fish Sandwich", "price": 13.49, "emoji": "🥪", "desc": "Fried cod, lettuce, pickles"}
+    }
+  },
+  "sides": {
+    "name": "🍟 Sides & Snacks",
+    "items": {
+      "SD1": {"name": "Crispy French Fries", "price": 3.99, "emoji": "🍟", "desc": "Golden crispy, seasoned salt"},
+      "SD2": {"name": "Onion Rings", "price": 4.99, "emoji": "⭕", "desc": "Beer battered, crispy"},
+      "SD3": {"name": "Mac & Cheese Bites", "price": 5.99, "emoji": "🧀", "desc": "Creamy inside, crispy outside"},
+      "SD4": {"name": "Chicken Wings (6pc)", "price": 8.99, "emoji": "🍗", "desc": "Buffalo or BBQ sauce"},
+      "SD5": {"name": "Loaded Nachos", "price": 7.99, "emoji": "🌮", "desc": "Cheese, jalapenos, sour cream"},
+      "SD6": {"name": "Caesar Salad", "price": 6.99, "emoji": "🥗", "desc": "Romaine, croutons, parmesan"}
+    }
+  },
+  "drinks": {
+    "name": "🥤 Drinks & Shakes",
+    "items": {
+      "DR1": {"name": "Coca Cola", "price": 2.99, "emoji": "🥤", "desc": "Ice cold, 16oz"},
+      "DR2": {"name": "Pepsi", "price": 2.99, "emoji": "🥤", "desc": "Ice cold, 16oz"},
+      "DR3": {"name": "Fresh Orange Juice", "price": 4.99, "emoji": "🍊", "desc": "Freshly squeezed, 12oz"},
+      "DR4": {"name": "Mango Lassi", "price": 5.99, "emoji": "🥭", "desc": "Fresh mango, yogurt"},
+      "DR5": {"name": "Strawberry Milkshake", "price": 6.99, "emoji": "🍓", "desc": "Real strawberries, thick"},
+      "DR6": {"name": "Lemonade", "price": 3.99, "emoji": "🍋", "desc": "Fresh squeezed, 16oz"},
+      "DR7": {"name": "Iced Coffee", "price": 4.99, "emoji": "☕", "desc": "Cold brew, milk, sugar"},
+      "DR8": {"name": "Water (Bottle)", "price": 1.99, "emoji": "💧", "desc": "500ml spring water"}
+    }
+  },
+  "desserts": {
+    "name": "🍰 Desserts",
+    "items": {
+      "DS1": {"name": "Chocolate Lava Cake", "price": 6.99, "emoji": "🍫", "desc": "Warm gooey center, vanilla ice cream"},
+      "DS2": {"name": "NY Cheesecake", "price": 5.99, "emoji": "🍰", "desc": "Classic NY style, strawberry"},
+      "DS3": {"name": "Oreo Milkshake", "price": 7.99, "emoji": "🥛", "desc": "Thick shake, crushed Oreos"},
+      "DS4": {"name": "Brownie Sundae", "price": 6.99, "emoji": "🍨", "desc": "Warm brownie, vanilla, choc sauce"}
+    }
   }
-  // ... add all other categories: pizza, bbq, fish, sides, drinks, desserts
 }
