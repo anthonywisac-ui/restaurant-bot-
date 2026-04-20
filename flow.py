@@ -1,8 +1,10 @@
 # flow.py - Complete conversation logic for restaurant bot
 import time
 import random
+import re
+import traceback
 from db import (
-    customer_sessions, saved_orders, customer_profiles,
+    customer_sessions, saved_ orders, customer_profiles,
     customer_order_lookup, manager_pending
 )
 from config import (
@@ -27,7 +29,6 @@ from whatsapp_handlers import (
 from stripe_utils import create_stripe_checkout_session
 from ai_utils import get_ai_response
 from menu_data import MENU
-from  import utils  # for any remaining utils not directly imported
 
 # Global constants that were originally in main.py
 DEAL_RULES = {
@@ -48,7 +49,7 @@ SIDE_CHOICES = {
     "SALAD": "Caesar Salad",
 }
 
-# ========== Session management (from original main.py) ==========
+# ========== Session management ==========
 def new_session(sender=None, table_number=None):
     profile = customer_profiles.get(sender, {}) if sender else {}
     is_returning = bool(profile.get("name"))
@@ -122,6 +123,8 @@ def get_favorite_items(sender):
 
 # ========== Deal and side helpers ==========
 async def prompt_deal_pick(sender, session, kind, lang="en"):
+    import aiohttp
+    from config import WHATSAPP_TOKEN, WHATSAPP_PHONE_NUMBER_ID
     ctx = session["deal_context"]
     deal_id = ctx["deal_id"]
     if kind == "burger":
@@ -154,16 +157,6 @@ async def prompt_deal_pick(sender, session, kind, lang="en"):
             "title": title,
             "description": desc,
         })
-    # This uses the WhatsApp list message sending - we'll reuse send_category_items style but inline
-    # Actually we'll create a temporary function for this in whatsapp_handlers? For simplicity, we'll use the same logic as original.
-    # But to avoid duplication, we'll call a generic list sender. However for now I'll keep as original but use the imported send functions.
-    # The original had a direct post. We'll replicate using aiohttp directly? Better to have a generic send_list function.
-    # Given complexity, I'll assume we have send_list_message in whatsapp_handlers. But to keep this file self-contained, I'll replicate the original method.
-    # To avoid making this too long, I'll use the same approach as original: direct aiohttp post.
-    # But we already have send_text_message etc. Let's use a generic function that we will add to whatsapp_handlers later.
-    # For now, I'll keep the original code with direct aiohttp.
-    import aiohttp
-    from config import WHATSAPP_TOKEN, WHATSAPP_PHONE_NUMBER_ID
     url = f"https://graph.facebook.com/v18.0/{WHATSAPP_PHONE_NUMBER_ID}/messages"
     headers = {"Authorization": f"Bearer {WHATSAPP_TOKEN}", "Content-Type": "application/json"}
     payload = {
@@ -205,14 +198,14 @@ async def finalize_deal(sender, session, lang="en"):
     await send_qty_control(sender, key, deal_item, session["order"], lang)
 
 async def prompt_bbq_sides(sender, session, lang="en"):
+    import aiohttp
+    from config import WHATSAPP_TOKEN, WHATSAPP_PHONE_NUMBER_ID
     ctx = session["deal_context"]
     picked_so_far = ctx.get("sides", [])
     needed = ctx.get("sides_needed", 2)
     remaining = needed - len(picked_so_far)
     prompt_key = "pick_ribs_sides" if ctx.get("deal_id") == "DL5" else "pick_bbq_sides"
     progress = f" ({len(picked_so_far)}/{needed} picked)" if picked_so_far else ""
-    import aiohttp
-    from config import WHATSAPP_TOKEN, WHATSAPP_PHONE_NUMBER_ID
     url = f"https://graph.facebook.com/v18.0/{WHATSAPP_PHONE_NUMBER_ID}/messages"
     headers = {"Authorization": f"Bearer {WHATSAPP_TOKEN}", "Content-Type": "application/json"}
     rows = [
@@ -270,7 +263,6 @@ async def _handle_flow_inner(sender, text, is_button=False):
     lang = session.get("lang", "en")
     text_lower = text.lower().strip()
 
-    # Post-order window handling
     if stage == "post_order":
         elapsed = time.time() - session.get("post_order_at", 0)
         if elapsed > POST_ORDER_WINDOW:
@@ -296,14 +288,12 @@ async def _handle_flow_inner(sender, text, is_button=False):
                 await send_text_message(sender, reply)
                 return
 
-    # Hard reset
     if text_lower in ["restart", "reset", "start over", "clear"]:
         customer_sessions[sender] = new_session(sender)
         customer_sessions[sender]["stage"] = "lang_select"
         await send_language_selection(sender)
         return
 
-    # Order status query when not in ordering stages
     ordering_stages = {"items", "qty_control", "upsell_check", "upsell_combo", "confirm",
                        "get_name", "address", "delivery", "payment", "deal_build",
                        "bbq_sides", "repeat_confirm"}
@@ -311,7 +301,6 @@ async def _handle_flow_inner(sender, text, is_button=False):
         await handle_order_status(sender, session, lang, text)
         return
 
-    # Returning customer
     if stage == "returning":
         profile = customer_profiles.get(sender, {})
         name = profile.get("name", "")
@@ -794,7 +783,7 @@ async def _handle_flow_inner(sender, text, is_button=False):
     session["conversation"] = session["conversation"][-8:]
     await send_text_message(sender, reply)
 
-# ========== Order status helper (moved from original) ==========
+# ========== Order status helper ==========
 async def handle_order_status(sender, session, lang, text):
     order_id = extract_order_number(text)
     if not order_id:
