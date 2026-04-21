@@ -124,7 +124,7 @@ def get_favorite_items(sender):
 
 # ========== Deal and side helpers ==========
 async def prompt_deal_pick(sender, session, kind, lang="en"):
-    import aiohttp
+    from session import SharedSession
     from config import WHATSAPP_TOKEN, WHATSAPP_PHONE_NUMBER_ID
     ctx = session["deal_context"]
     deal_id = ctx["deal_id"]
@@ -170,10 +170,9 @@ async def prompt_deal_pick(sender, session, kind, lang="en"):
             "action": {"button": "Select", "sections": [{"title": truncate_title(cat["name"], 24), "rows": rows}]}
         }
     }
-    async with aiohttp.ClientSession() as s:
-        async with s.post(url, json=payload, headers=headers) as r:
-            _ = await r.text()
-
+    shared_session = await SharedSession.get_session()
+    async with shared_session.post(url, json=payload, headers=headers) as r:
+        _ = await r.text()
 async def finalize_deal(sender, session, lang="en"):
     ctx = session["deal_context"]
     deal_id = ctx["deal_id"]
@@ -199,7 +198,7 @@ async def finalize_deal(sender, session, lang="en"):
     await send_qty_control(sender, key, deal_item, session["order"], lang)
 
 async def prompt_bbq_sides(sender, session, lang="en"):
-    import aiohttp
+    from session import SharedSession
     from config import WHATSAPP_TOKEN, WHATSAPP_PHONE_NUMBER_ID
     ctx = session["deal_context"]
     picked_so_far = ctx.get("sides", [])
@@ -225,9 +224,9 @@ async def prompt_bbq_sides(sender, session, lang="en"):
             "action": {"button": "Pick Side", "sections": [{"title": "Sides", "rows": rows}]}
         }
     }
-    async with aiohttp.ClientSession() as s:
-        async with s.post(url, json=payload, headers=headers) as r:
-            _ = await r.text()
+    shared_session = await SharedSession.get_session()
+    async with shared_session.post(url, json=payload, headers=headers) as r:
+        _ = await r.text()
 
 async def finalize_bbq_sides(sender, session, lang="en"):
     ctx = session["deal_context"]

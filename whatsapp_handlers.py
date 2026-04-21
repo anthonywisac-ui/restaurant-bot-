@@ -6,6 +6,7 @@ from strings import t
 from utils import truncate_title, safe_btn, get_order_total, get_order_text, get_delivery_fee
 from menu_data import MENU
 from db import saved_orders
+from session import SharedSession
 
 # Helper to avoid circular import
 def _get_session(sender):
@@ -17,10 +18,10 @@ async def send_text_message(to, message):
     headers = {"Authorization": f"Bearer {WHATSAPP_TOKEN}", "Content-Type": "application/json"}
     payload = {"messaging_product": "whatsapp", "to": to, "type": "text", "text": {"body": message}}
     try:
-        async with aiohttp.ClientSession() as s:
-            async with s.post(url, json=payload, headers=headers) as r:
-                if r.status >= 400:
-                    print(f"send_text_message failed {r.status}: {await r.text()}")
+        session = await SharedSession.get_session()
+        async with session.post(url, json=payload, headers=headers) as r:
+            if r.status >= 400:
+                print(f"send_text_message failed {r.status}: {await r.text()}")
     except Exception as e:
         print(f"send_text_message exception: {e}")
 
@@ -54,8 +55,8 @@ async def send_language_selection(sender):
             }
         }
     }
-    async with aiohttp.ClientSession() as s:
-        await s.post(url, json=payload, headers=headers)
+    session = await SharedSession.get_session()
+    await session.post(url, json=payload, headers=headers)
 
 async def send_main_menu(sender, current_order, lang):
     total = get_order_total(current_order)
@@ -93,8 +94,8 @@ async def send_main_menu(sender, current_order, lang):
             }
         }
     }
-    async with aiohttp.ClientSession() as s:
-        await s.post(url, json=payload, headers=headers)
+    session = await SharedSession.get_session()
+    await session.post(url, json=payload, headers=headers)
 
 async def send_category_items(sender, cat_key, current_order, lang):
     cat = MENU[cat_key]
@@ -131,8 +132,8 @@ async def send_category_items(sender, cat_key, current_order, lang):
             }
         }
     }
-    async with aiohttp.ClientSession() as s:
-        await s.post(url, json=payload, headers=headers)
+    session = await SharedSession.get_session()
+    await session.post(url, json=payload, headers=headers)
 
 async def send_qty_control(sender, item_id, item, order, lang):
     qty = order.get(item_id, {}).get("qty", 1)
@@ -168,11 +169,11 @@ async def send_qty_control(sender, item_id, item, order, lang):
         }
     }
     try:
-        async with aiohttp.ClientSession() as s:
-            async with s.post(url, json=payload, headers=headers) as r:
-                if r.status >= 400:
-                    print(f"send_qty_control failed {r.status}")
-                    await send_cart_view(sender, order, lang)
+        session = await SharedSession.get_session()
+        async with session.post(url, json=payload, headers=headers) as r:
+            if r.status >= 400:
+                print(f"send_qty_control failed {r.status}")
+                await send_cart_view(sender, order, lang)
     except Exception as e:
         print(f"send_qty_control exception: {e}")
         await send_cart_view(sender, order, lang)
@@ -197,8 +198,8 @@ async def send_quick_combo_upsell(sender, lang):
             }
         }
     }
-    async with aiohttp.ClientSession() as s:
-        await s.post(url, json=payload, headers=headers)
+    session = await SharedSession.get_session()
+    await session.post(url, json=payload, headers=headers)
 
 async def send_quick_upsell(sender, item_id, message, lang, upsell_type="generic"):
     url = f"https://graph.facebook.com/v18.0/{WHATSAPP_PHONE_NUMBER_ID}/messages"
@@ -218,8 +219,8 @@ async def send_quick_upsell(sender, item_id, message, lang, upsell_type="generic
             }
         }
     }
-    async with aiohttp.ClientSession() as s:
-        await s.post(url, json=payload, headers=headers)
+    session = await SharedSession.get_session()
+    await session.post(url, json=payload, headers=headers)
 
 async def send_dessert_upsell(sender, order, lang):
     total = get_order_total(order)
@@ -244,8 +245,8 @@ async def send_dessert_upsell(sender, order, lang):
             }
         }
     }
-    async with aiohttp.ClientSession() as s:
-        await s.post(url, json=payload, headers=headers)
+    session = await SharedSession.get_session()
+    await session.post(url, json=payload, headers=headers)
 
 async def send_cart_view(sender, order, lang):
     if not order:
@@ -273,8 +274,8 @@ async def send_cart_view(sender, order, lang):
             }
         }
     }
-    async with aiohttp.ClientSession() as s:
-        await s.post(url, json=payload, headers=headers)
+    session = await SharedSession.get_session()
+    await session.post(url, json=payload, headers=headers)
 
 async def send_order_summary(sender, order, lang):
     total = get_order_total(order)
@@ -314,11 +315,12 @@ async def send_order_summary(sender, order, lang):
             }
         }
     }
-    async with aiohttp.ClientSession() as s:
-        await s.post(url, json=payload, headers=headers)
+    session = await SharedSession.get_session()
+    await session.post(url, json=payload, headers=headers)
 
 async def send_delivery_buttons(sender, name, lang):
-    session = _get_session(sender)
+    from flow import get_session
+    session = get_session(sender)
     table_num = session.get("table_number")
     url = f"https://graph.facebook.com/v18.0/{WHATSAPP_PHONE_NUMBER_ID}/messages"
     headers = {"Authorization": f"Bearer {WHATSAPP_TOKEN}", "Content-Type": "application/json"}
@@ -346,8 +348,8 @@ async def send_delivery_buttons(sender, name, lang):
             "action": {"buttons": buttons}
         }
     }
-    async with aiohttp.ClientSession() as s:
-        await s.post(url, json=payload, headers=headers)
+    session = await SharedSession.get_session()
+    await session.post(url, json=payload, headers=headers)
 
 async def send_payment_buttons(sender, name, lang):
     url = f"https://graph.facebook.com/v18.0/{WHATSAPP_PHONE_NUMBER_ID}/messages"
@@ -370,8 +372,8 @@ async def send_payment_buttons(sender, name, lang):
             }
         }
     }
-    async with aiohttp.ClientSession() as s:
-        await s.post(url, json=payload, headers=headers)
+    session = await SharedSession.get_session()
+    await session.post(url, json=payload, headers=headers)
     # Back button
     back_payload = {
         "messaging_product": "whatsapp",
@@ -385,8 +387,7 @@ async def send_payment_buttons(sender, name, lang):
             }
         }
     }
-    async with aiohttp.ClientSession() as s:
-        await s.post(url, json=back_payload, headers=headers)
+    await session.post(url, json=back_payload, headers=headers)
 
 async def send_order_confirmed(sender, session_data, lang):
     order = session_data.get("order", {})
@@ -441,8 +442,8 @@ async def send_min_order_warning(sender, dtype, lang):
             }
         }
     }
-    async with aiohttp.ClientSession() as s:
-        await s.post(url, json=payload, headers=headers)
+    session = await SharedSession.get_session()
+    await session.post(url, json=payload, headers=headers)
 
 async def send_returning_customer_menu(sender, name, fav_text, lang):
     url = f"https://graph.facebook.com/v18.0/{WHATSAPP_PHONE_NUMBER_ID}/messages"
@@ -465,8 +466,8 @@ async def send_returning_customer_menu(sender, name, fav_text, lang):
             }
         }
     }
-    async with aiohttp.ClientSession() as s:
-        await s.post(url, json=payload, headers=headers)
+    session = await SharedSession.get_session()
+    await session.post(url, json=payload, headers=headers)
 
 async def send_repeat_order_confirm(sender, last_items, address, lang):
     addr_text = f"\nDelivery to: {address}" if address else "\nPickup from store"
@@ -490,8 +491,8 @@ async def send_repeat_order_confirm(sender, last_items, address, lang):
             }
         }
     }
-    async with aiohttp.ClientSession() as s:
-        await s.post(url, json=payload, headers=headers)
+    session = await SharedSession.get_session()
+    await session.post(url, json=payload, headers=headers)
 
 async def send_manager_action_list(order_id, customer_number, header_text, body_text, footer_text="Tap action to update customer"):
     url = f"https://graph.facebook.com/v18.0/{WHATSAPP_PHONE_NUMBER_ID}/messages"
@@ -528,12 +529,12 @@ async def send_manager_action_list(order_id, customer_number, header_text, body_
         }
     }
     try:
-        async with aiohttp.ClientSession() as s:
-            async with s.post(url, json=payload, headers=headers) as r:
-                if r.status >= 400:
-                    print(f"Manager list send failed: {await r.text()}")
-                    fallback = f"{body_text}\n\nReply with:\nORDER#{order_id} READY\nORDER#{order_id} OUT FOR DELIVERY\nORDER#{order_id} DELAYED 15\nORDER#{order_id} CANCELLED"
-                    await send_whatsapp_to_number(MANAGER_NUMBER, fallback)
+        session = await SharedSession.get_session()
+        async with session.post(url, json=payload, headers=headers) as r:
+            if r.status >= 400:
+                print(f"Manager list send failed: {await r.text()}")
+                fallback = f"{body_text}\n\nReply with:\nORDER#{order_id} READY\nORDER#{order_id} OUT FOR DELIVERY\nORDER#{order_id} DELAYED 15\nORDER#{order_id} CANCELLED"
+                await send_whatsapp_to_number(MANAGER_NUMBER, fallback)
     except Exception as e:
         print(f"Manager list exception: {e}")
 
@@ -542,8 +543,8 @@ async def send_whatsapp_to_number(to_number, message):
     headers = {"Authorization": f"Bearer {WHATSAPP_TOKEN}", "Content-Type": "application/json"}
     payload = {"messaging_product": "whatsapp", "to": to_number, "type": "text", "text": {"body": message}}
     try:
-        async with aiohttp.ClientSession() as s:
-            async with s.post(url, json=payload, headers=headers) as r:
-                print(f"Sent to {to_number}: {r.status}")
+        session = await SharedSession.get_session()
+        async with session.post(url, json=payload, headers=headers) as r:
+            print(f"Sent to {to_number}: {r.status}")
     except Exception as e:
         print(f"Error sending to {to_number}: {e}")

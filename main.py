@@ -17,6 +17,7 @@ from whatsapp_handlers import send_language_selection, send_text_message, send_c
 from stripe_utils import handle_stripe_webhook
 from menu_data import MENU, reload_menu
 from strings import reload_strings
+from session import SharedSession
 
 stripe.api_key = STRIPE_SECRET_KEY
 
@@ -198,6 +199,11 @@ async def admin_reload(secret: str):
     return {"status": "ok", "message": "Menu and strings reloaded"}
 
 # ==================== RUN ====================
+
+
+@app.on_event("shutdown")
+async def shutdown_event():
+    await SharedSession.close_session()
 if __name__ == "__main__":
     port = int(os.getenv("PORT", "8000"))
     uvicorn.run("main:app", host="0.0.0.0", port=port, reload=True)

@@ -1,6 +1,7 @@
 import aiohttp
 from config import GROQ_API_KEY, LANG_NAMES, MENU_SUMMARY
 from strings import t
+from session import SharedSession
 
 async def get_ai_response(sender, user_message, lang="en", session=None, extra_instruction=""):
     lang_name = LANG_NAMES.get(lang, "English")
@@ -23,10 +24,10 @@ If customer seems confused or stuck, guide them to next step clearly."""
         "max_tokens": 150
     }
     try:
-        async with aiohttp.ClientSession() as s:
-            async with s.post("https://api.groq.com/openai/v1/chat/completions", json=payload, headers=headers) as r:
-                result = await r.json()
-                return result["choices"][0]["message"]["content"]
+        shared_session = await SharedSession.get_session()
+        async with shared_session.post("https://api.groq.com/openai/v1/chat/completions", json=payload, headers=headers) as r:
+            result = await r.json()
+            return result["choices"][0]["message"]["content"]
     except Exception as e:
         print(f"AI Error: {e}")
         return t(lang, "greeting_welcome")
