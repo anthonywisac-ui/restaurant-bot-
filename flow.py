@@ -31,7 +31,7 @@ from stripe_utils import create_stripe_checkout_session
 from ai_utils import get_ai_response
 from menu_data import MENU
 
-# Global constants (unchanged)
+# Global constants
 DEAL_RULES = {
     "DL1": {"requires": "burger_in_cart"},
     "DL2": {"picks": ["burger"]},
@@ -50,7 +50,7 @@ SIDE_CHOICES = {
     "SALAD": "Caesar Salad",
 }
 
-# ========== Session management (still needed in flow) ==========
+# ========== Session management ==========
 def new_session(sender=None, table_number=None):
     profile = customer_profiles.get(sender, {}) if sender else {}
     is_returning = bool(profile.get("name"))
@@ -72,6 +72,8 @@ def new_session(sender=None, table_number=None):
         "order_id": None,
         "deal_context": None,
         "post_order_at": 0,
+        "just_confirmed": False,      # new flag
+        "just_confirmed_at": 0,       # new timestamp
     }
 
 def get_session(sender):
@@ -79,52 +81,9 @@ def get_session(sender):
         customer_sessions[sender] = new_session(sender)
     return customer_sessions[sender]
 
-def save_profile(sender, session):
-    if session.get("name"):
-        profile = customer_profiles.get(sender, {"order_history": []})
-        profile.update({
-            "name": session.get("name", ""),
-            "address": session.get("address", ""),
-            "lang": session.get("lang", "en"),
-            "delivery_type": session.get("delivery_type", ""),
-            "payment": session.get("payment", ""),
-        })
-        if "order_history" not in profile:
-            profile["order_history"] = []
-        customer_profiles[sender] = profile
-
-def add_to_order_history(sender, order_id, order_items):
-    profile = customer_profiles.get(sender, {"order_history": []})
-    if "order_history" not in profile:
-        profile["order_history"] = []
-    profile["order_history"].append({
-        "order_id": order_id,
-        "items": [
-            {"item_id": k, "name": v["item"]["name"], "qty": v["qty"]}
-            for k, v in order_items.items()
-        ],
-        "timestamp": time.time()
-    })
-    profile["order_history"] = profile["order_history"][-5:]
-    customer_profiles[sender] = profile
-
-def get_favorite_items(sender):
-    profile = customer_profiles.get(sender, {})
-    history = profile.get("order_history", [])
-    if not history:
-        return []
-    item_counts = {}
-    for order in history:
-        for item in order.get("items", []):
-            name = item.get("name") if isinstance(item, dict) else item
-            if name:
-                item_counts[name] = item_counts.get(name, 0) + 1
-    sorted_items = sorted(item_counts.items(), key=lambda x: x[1], reverse=True)
-    return [item for item, count in sorted_items[:3]]
-
 # ========== Deal and side helpers ==========
 async def prompt_deal_pick(sender, session, kind, lang="en"):
-    from session import SharedSession
+    import aiohttp
     from config import WHATSAPP_TOKEN, WHATSAPP_PHONE_NUMBER_ID
     ctx = session["deal_context"]
     deal_id = ctx["deal_id"]
@@ -170,9 +129,10 @@ async def prompt_deal_pick(sender, session, kind, lang="en"):
             "action": {"button": "Select", "sections": [{"title": truncate_title(cat["name"], 24), "rows": rows}]}
         }
     }
-    shared_session = await SharedSession.get_session()
+    shared_session = await SharedSession.get_session()  # assuming you have SharedSession from session.py
     async with shared_session.post(url, json=payload, headers=headers) as r:
         _ = await r.text()
+
 async def finalize_deal(sender, session, lang="en"):
     ctx = session["deal_context"]
     deal_id = ctx["deal_id"]
@@ -198,7 +158,7 @@ async def finalize_deal(sender, session, lang="en"):
     await send_qty_control(sender, key, deal_item, session["order"], lang)
 
 async def prompt_bbq_sides(sender, session, lang="en"):
-    from session import SharedSession
+    import aiohttp
     from config import WHATSAPP_TOKEN, WHATSAPP_PHONE_NUMBER_ID
     ctx = session["deal_context"]
     picked_so_far = ctx.get("sides", [])
@@ -256,7 +216,7 @@ async def finalize_bbq_sides(sender, session, lang="en"):
         await send_text_message(sender, f"✅ Sides locked in: {', '.join(sides)}")
         await send_qty_control(sender, target_id, item, session["order"], lang)
 
-# ========== Order status helper (forward declared) ==========
+# ========== Order status helper ==========
 async def handle_order_status(sender, session, lang, text):
     order_id = extract_order_number(text)
     if not order_id:
@@ -394,49 +354,16 @@ async def notify_manager_status(order_id, customer_number, reason="Customer inqu
         footer_text="Tap to update customer now"
     )
 
-# ========== Save to sheet ==========
-async def save_to_sheet(customer_number, session, order_id):
-    import aiohttp
-    order = session.get("order", {})
-    total = get_order_total(order)
-    tax = total * 0.08
-    delivery_charge = get_delivery_fee(total, session.get("delivery_type"))
-    grand_total = total + tax + delivery_charge
-    items_list = [f"{v['item']['name']} x{v['qty']}" for v in order.values()]
-    data = {
-        "order_id": str(order_id),
-        "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
-        "customer_name": session.get("name", ""),
-        "customer_number": f"+{customer_number}",
-        "items": ", ".join(items_list),
-        "subtotal": round(total, 2),
-        "tax": round(tax, 2),
-        "delivery_charge": round(delivery_charge, 2),
-        "grand_total": round(grand_total, 2),
-        "delivery_type": session.get("delivery_type", ""),
-        "address": session.get("address", ""),
-        "payment": session.get("payment", ""),
-        "language": session.get("lang", "en"),
-        "status": "New"
-    }
-    saved_orders[order_id] = {**data, "timestamp": time.time()}
-    customer_order_lookup.setdefault(customer_number, []).append(order_id)
-    customer_order_lookup[customer_number] = customer_order_lookup[customer_number][-10:]
-    manager_pending[order_id] = customer_number
-    print(f"Order #{order_id} linked to customer {customer_number}")
-    if GOOGLE_SHEET_WEBHOOK:
-        try:
-            async with aiohttp.ClientSession() as s:
-                async with s.post(GOOGLE_SHEET_WEBHOOK, json=data) as r:
-                    print(f"Sheet saved: {r.status}")
-        except Exception as e:
-            print(f"Sheet error: {e}")
-    else:
-        print(f"Order saved locally: #{order_id}")
-
 # ========== Main flow handler ==========
 async def _handle_flow_inner(sender, text, is_button=False):
     session = get_session(sender)
+
+    # Clear just_confirmed flag after 2 seconds
+    if session.get("just_confirmed"):
+        if time.time() - session.get("just_confirmed_at", 0) > 2:
+            session.pop("just_confirmed", None)
+            session.pop("just_confirmed_at", None)
+
     stage = session["stage"]
     lang = session.get("lang", "en")
     text_lower = text.lower().strip()
@@ -889,14 +816,11 @@ async def _handle_flow_inner(sender, text, is_button=False):
             grand_total = total + tax + delivery_charge
 
             order_id = str(int(time.time()))
-
-            # Store the ENTIRE session so the webhook has all data (order, name, address, table, language, etc.)
             saved_orders[order_id] = {
-                "session": session.copy(),   # save a copy of the full session
+                "session": session.copy(),
                 "sender": sender,
                 "timestamp": time.time()
             }
-            # Also keep the old structure for compatibility (optional)
             saved_orders[order_id]["order"] = session["order"]
             saved_orders[order_id]["customer_name"] = session.get("name", "")
 
@@ -907,15 +831,19 @@ async def _handle_flow_inner(sender, text, is_button=False):
                 await send_text_message(sender, "❌ Payment link creation failed. Please try again or choose another payment method.")
             return
 
-        # For cash and Apple Pay, proceed to final confirmation
+        # For cash and Apple Pay
         order_id = await send_order_confirmed(sender, session, lang)
         session["order_id"] = order_id
+        session["just_confirmed"] = True
+        session["just_confirmed_at"] = time.time()
         save_profile(sender, session)
         add_to_order_history(sender, order_id, session["order"])
         await notify_manager(sender, session, order_id)
         await save_to_sheet(sender, session, order_id)
         session["stage"] = "post_order"
         session["post_order_at"] = time.time()
+        session["order"] = {}          # clear cart
+        session["last_added"] = None
         return
 
     if stage == "get_name":
