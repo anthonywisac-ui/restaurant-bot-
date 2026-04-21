@@ -877,32 +877,30 @@ async def _handle_flow_inner(sender, text, is_button=False):
         return
 
     # ── PAYMENT BLOCK ──
-    if text in ["CASH", "CARD_STRIPE", "APPLE_PAY"]:
-        payment_map = {"CASH": t(lang, "cash"), "CARD_STRIPE": t(lang, "card"), "APPLE_PAY": t(lang, "apple_pay")}
-        session["payment"] = payment_map[text]
+  if text == "CARD_STRIPE":
+    total = get_order_total(session["order"])
+    tax = total * 0.08
+    delivery_charge = get_delivery_fee(total, session.get("delivery_type"))
+    grand_total = total + tax + delivery_charge
 
-        if text == "CARD_STRIPE":
-            total = get_order_total(session["order"])
-            tax = total * 0.08
-            delivery_charge = get_delivery_fee(total, session.get("delivery_type"))
-            grand_total = total + tax + delivery_charge
+    order_id = str(int(time.time()))
 
-            order_id = str(int(time.time()))
-            saved_orders[order_id] = {
-                "order": session["order"],
-                "sender": sender,
-                "customer_name": session.get("name", ""),
-                "delivery_type": session.get("delivery_type", ""),
-                "address": session.get("address", ""),
-                "timestamp": time.time()
-            }
+    # Store the ENTIRE session so the webhook has all data (order, name, address, table, language, etc.)
+    saved_orders[order_id] = {
+        "session": session.copy(),   # save a copy of the full session
+        "sender": sender,
+        "timestamp": time.time()
+    }
+    # Also keep the old structure for compatibility (optional)
+    saved_orders[order_id]["order"] = session["order"]
+    saved_orders[order_id]["customer_name"] = session.get("name", "")
 
-            payment_url = await create_stripe_checkout_session(order_id, grand_total)
-            if payment_url:
-                await send_text_message(sender, f"💳 Pay here:\n{payment_url}")
-            else:
-                await send_text_message(sender, "❌ Payment link creation failed. Please try again or choose another payment method.")
-            return
+    payment_url = await create_stripe_checkout_session(order_id, grand_total)
+    if payment_url:
+        await send_text_message(sender, f"💳 Pay here:\n{payment_url}")
+    else:
+        await send_text_message(sender, "❌ Payment link creation failed. Please try again or choose another payment method.")
+    return
 
         order_id = await send_order_confirmed(sender, session, lang)
         session["order_id"] = order_id
