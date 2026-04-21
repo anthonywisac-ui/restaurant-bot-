@@ -72,8 +72,8 @@ def new_session(sender=None, table_number=None):
         "order_id": None,
         "deal_context": None,
         "post_order_at": 0,
-        "just_confirmed": False,      # new flag
-        "just_confirmed_at": 0,       # new timestamp
+        "just_confirmed": False,
+        "just_confirmed_at": 0,
     }
 
 def get_session(sender):
@@ -85,6 +85,7 @@ def get_session(sender):
 async def prompt_deal_pick(sender, session, kind, lang="en"):
     import aiohttp
     from config import WHATSAPP_TOKEN, WHATSAPP_PHONE_NUMBER_ID
+    from session import SharedSession
     ctx = session["deal_context"]
     deal_id = ctx["deal_id"]
     if kind == "burger":
@@ -129,7 +130,7 @@ async def prompt_deal_pick(sender, session, kind, lang="en"):
             "action": {"button": "Select", "sections": [{"title": truncate_title(cat["name"], 24), "rows": rows}]}
         }
     }
-    shared_session = await SharedSession.get_session()  # assuming you have SharedSession from session.py
+    shared_session = await SharedSession.get_session()
     async with shared_session.post(url, json=payload, headers=headers) as r:
         _ = await r.text()
 
@@ -160,6 +161,7 @@ async def finalize_deal(sender, session, lang="en"):
 async def prompt_bbq_sides(sender, session, lang="en"):
     import aiohttp
     from config import WHATSAPP_TOKEN, WHATSAPP_PHONE_NUMBER_ID
+    from session import SharedSession
     ctx = session["deal_context"]
     picked_so_far = ctx.get("sides", [])
     needed = ctx.get("sides_needed", 2)
@@ -364,6 +366,10 @@ async def _handle_flow_inner(sender, text, is_button=False):
             session.pop("just_confirmed", None)
             session.pop("just_confirmed_at", None)
 
+    # Safety: if stage is stuck in upsell_combo but no pending upsell, reset to menu
+    if session.get("stage") == "upsell_combo" and not session.get("_pending_upsell_type"):
+        session["stage"] = "menu"
+
     stage = session["stage"]
     lang = session.get("lang", "en")
     text_lower = text.lower().strip()
@@ -446,6 +452,7 @@ async def _handle_flow_inner(sender, text, is_button=False):
             history = profile.get("order_history", [])
             if history:
                 last_items = history[-1].get("items", [])
+                session["order"] = {}
                 for it in last_items:
                     if isinstance(it, dict):
                         iid = it.get("item_id")
@@ -455,16 +462,21 @@ async def _handle_flow_inner(sender, text, is_button=False):
                             if item:
                                 session["order"][iid] = {"item": item, "qty": qty}
                     else:
+                        # legacy: match by name
                         for cat_data in MENU.values():
                             for item_id, item in cat_data["items"].items():
                                 if item["name"] == it:
                                     session["order"][item_id] = {"item": item, "qty": 1}
-            if session["order"]:
-                session["stage"] = "confirm"
-                await send_order_summary(sender, session["order"], lang)
+                if session["order"]:
+                    session["stage"] = "confirm"
+                    await send_order_summary(sender, session["order"], lang)
+                else:
+                    session["stage"] = "menu"
+                    await send_main_menu(sender, session["order"], lang)
             else:
                 session["stage"] = "menu"
                 await send_main_menu(sender, session["order"], lang)
+            return
         else:
             session["stage"] = "menu"
             await send_main_menu(sender, session["order"], lang)
@@ -715,20 +727,26 @@ async def _handle_flow_inner(sender, text, is_button=False):
             await send_main_menu(sender, session["order"], lang)
         return
 
+    # ========== FIXED ADD_COMBO_DL1 BLOCK ==========
     if text == "ADD_COMBO_DL1":
-        deal_item = MENU["deals"]["items"]["DL1"]
-        if "DL1" in session["order"]:
-            session["order"]["DL1"]["qty"] += 1
-        else:
-            session["order"]["DL1"] = {"item": deal_item, "qty": 1}
-        session.pop("_pending_upsell_type", None)
-        last = session.get("last_added")
-        session["stage"] = "qty_control"
-        if last and last in session["order"]:
-            await send_qty_control(sender, last, session["order"][last]["item"], session["order"], lang)
-        else:
-            await send_cart_view(sender, session["order"], lang)
-        return
+        try:
+            deal_item = MENU["deals"]["items"]["DL1"]
+            if "DL1" in session["order"]:
+                session["order"]["DL1"]["qty"] += 1
+            else:
+                session["order"]["DL1"] = {"item": deal_item, "qty": 1}
+            session.pop("_pending_upsell_type", None)
+            last = session.get("last_added")
+            session["stage"] = "qty_control"
+            if last and last in session["order"]:
+                await send_qty_control(sender, last, session["order"][last]["item"], session["order"], lang)
+            else:
+                await send_cart_view(sender, session["order"], lang)
+            return
+        except Exception as e:
+            print(f"ADD_COMBO_DL1 error: {e}")
+            await send_text_message(sender, "Sorry, couldn't add the combo. Please try again.")
+            return
 
     if text == "CHECKOUT":
         if session["order"]:
@@ -842,7 +860,7 @@ async def _handle_flow_inner(sender, text, is_button=False):
         await save_to_sheet(sender, session, order_id)
         session["stage"] = "post_order"
         session["post_order_at"] = time.time()
-        session["order"] = {}          # clear cart
+        session["order"] = {}
         session["last_added"] = None
         return
 
@@ -903,9 +921,6 @@ async def handle_flow(sender, text, is_button=False):
         try:
             session = get_session(sender)
             lang = session.get("lang", "en")
-            if session.get("order"):
-                await send_cart_view(sender, session["order"], lang)
-            else:
-                await send_text_message(sender, "Sorry, something glitched on our end. Type *menu* to continue. 🙏")
+            await send_text_message(sender, "Sorry, something went wrong. Please try again or type *menu*.")
         except Exception as inner:
             print(f"❌ Recovery also failed: {inner}")
