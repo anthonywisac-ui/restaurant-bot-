@@ -9,7 +9,7 @@ from db import (
 )
 from config import (
     POST_ORDER_WINDOW, MIN_DELIVERY_ORDER, MIN_PICKUP_ORDER,
-    LANG_NAMES, FREE_DELIVERY_THRESHOLD, DELIVERY_CHARGE
+    LANG_NAMES, FREE_DELIVERY_THRESHOLD, DELIVERY_CHARGE, GOOGLE_SHEET_WEBHOOK
 )
 from strings import t
 from utils import (
@@ -255,6 +255,183 @@ async def finalize_bbq_sides(sender, session, lang="en"):
         item = session["order"][target_id]["item"]
         await send_text_message(sender, f"✅ Sides locked in: {', '.join(sides)}")
         await send_qty_control(sender, target_id, item, session["order"], lang)
+
+# ========== Order status helper (forward declared) ==========
+async def handle_order_status(sender, session, lang, text):
+    order_id = extract_order_number(text)
+    if not order_id:
+        order_id = session.get("order_id")
+    if not order_id:
+        orders_list = customer_order_lookup.get(sender, [])
+        if orders_list:
+            order_id = orders_list[-1]
+    if not order_id:
+        await send_text_message(
+            sender,
+            "I don't see an active order for you. Type *menu* to place a new order! 😊"
+        )
+        return
+    order_data = saved_orders.get(order_id)
+    customer_name = (order_data or {}).get("customer_name", "")
+    greet = f"Hi {customer_name}! " if customer_name else ""
+    if not order_data:
+        await send_text_message(
+            sender,
+            f"{greet}Let me check on order #{order_id} with our team right away! 🔍\n\n"
+            f"I'll get back to you in a moment. Thank you for your patience! 🙏"
+        )
+        await notify_manager_status(order_id, sender, reason="Data missing")
+        return
+    elapsed_min = (time.time() - order_data["timestamp"]) / 60
+    delivery_type = order_data.get("delivery_type", "pickup")
+    expected_max = 45 if delivery_type == "delivery" else 20
+    expected_min = 30 if delivery_type == "delivery" else 15
+    elapsed_int = int(elapsed_min)
+    if elapsed_min < expected_min:
+        remaining = expected_min - elapsed_int
+        msg = (
+            f"{greet}Your order #{order_id} is being prepared! 🍳\n\n"
+            f"⏱️ *Expected in about {remaining}-{expected_max - elapsed_int} more minutes*\n\n"
+            f"Our kitchen is working on it right now. Thanks for your patience! 😊"
+        )
+        await send_text_message(sender, msg)
+        return
+    if elapsed_min < expected_max:
+        remaining = expected_max - elapsed_int
+        if delivery_type == "delivery":
+            msg = (
+                f"{greet}Your order #{order_id} should be arriving any moment now! 🚚\n\n"
+                f"⏱️ *Around {max(1, remaining)} more minutes* to reach you.\n\n"
+                f"If it doesn't arrive soon, I'll check with the driver. Almost there! 😊"
+            )
+        else:
+            msg = (
+                f"{greet}Your order #{order_id} should be ready any moment! 🏪\n\n"
+                f"⏱️ *Around {max(1, remaining)} more minutes*.\n\n"
+                f"Feel free to head over — we'll have it hot and ready! 😊"
+            )
+        await send_text_message(sender, msg)
+        return
+    delay = elapsed_int - expected_max
+    if delivery_type == "delivery":
+        msg = (
+            f"{greet}I'm really sorry your order #{order_id} hasn't arrived yet! 🙏\n\n"
+            f"⏱️ It's been *{elapsed_int} minutes* — about {delay} mins longer than expected.\n\n"
+            f"I'm reaching out to our team right now to check on the driver. "
+            f"You'll have an update in the next few minutes. Thank you for your patience! 💚"
+        )
+    else:
+        msg = (
+            f"{greet}Sorry for the wait on order #{order_id}! 🙏\n\n"
+            f"⏱️ It's been *{elapsed_int} minutes* — about {delay} mins longer than expected.\n\n"
+            f"Let me check with the kitchen right now. I'll update you shortly! 💚"
+        )
+    await send_text_message(sender, msg)
+    await notify_manager_status(order_id, sender, reason=f"OVERDUE by {delay} mins — customer waiting")
+
+# ========== Manager notification helpers ==========
+async def notify_manager(customer_number, session, order_id):
+    order = session.get("order", {})
+    total = get_order_total(order)
+    tax = total * 0.08
+    delivery_charge = get_delivery_fee(total, session.get("delivery_type"))
+    grand_total = total + tax + delivery_charge
+    order_text = get_order_text(order)
+    lang_name = LANG_NAMES.get(session.get("lang", "en"), "English")
+    location_line = (
+        f"📍 Delivery: {session.get('address', '')}"
+        if session.get("delivery_type") == "delivery"
+        else "🏪 Pickup"
+    )
+    eta_line = "30-45 mins" if session.get("delivery_type") == "delivery" else "15-20 mins"
+    body_text = (
+        f"🔔 *NEW ORDER #{order_id}*\n\n"
+        f"👤 {session.get('name', 'N/A')}\n"
+        f"📱 +{customer_number}\n"
+        f"🌐 {lang_name}\n\n"
+        f"{order_text}\n\n"
+        f"Subtotal: ${total:.2f}\n"
+        f"Tax: ${tax:.2f}\n"
+        f"Delivery: ${delivery_charge:.2f}\n"
+        f"*Total: ${grand_total:.2f}*\n\n"
+        f"{location_line}\n"
+        f"💳 {session.get('payment', 'N/A')}\n"
+        f"⏱️ ETA: {eta_line}"
+    )
+    await send_manager_action_list(
+        order_id=order_id,
+        customer_number=customer_number,
+        header_text=f"🔔 New Order #{order_id}",
+        body_text=body_text,
+        footer_text="Tap Update Status when ready"
+    )
+    print(f"Manager notified: #{order_id}")
+
+async def notify_manager_status(order_id, customer_number, reason="Customer inquiry"):
+    order_data = saved_orders.get(order_id, {})
+    customer_name = order_data.get("customer_name", "Customer")
+    delivery_type = order_data.get("delivery_type", "pickup")
+    address = order_data.get("address", "")
+    elapsed_min = 0
+    if order_data.get("timestamp"):
+        elapsed_min = int((time.time() - order_data["timestamp"]) / 60)
+    location_line = f"📍 {address}" if address and delivery_type == "delivery" else "🏪 Pickup"
+    body_text = (
+        f"⚠️ *CUSTOMER WAITING — #{order_id}*\n\n"
+        f"👤 {customer_name}\n"
+        f"📱 +{customer_number}\n"
+        f"⏱️ Placed *{elapsed_min} min ago*\n"
+        f"🚚 {delivery_type.title()}\n"
+        f"{location_line}\n\n"
+        f"📢 {reason}"
+    )
+    await send_manager_action_list(
+        order_id=order_id,
+        customer_number=customer_number,
+        header_text=f"⚠️ Waiting — #{order_id}",
+        body_text=body_text,
+        footer_text="Tap to update customer now"
+    )
+
+# ========== Save to sheet ==========
+async def save_to_sheet(customer_number, session, order_id):
+    import aiohttp
+    order = session.get("order", {})
+    total = get_order_total(order)
+    tax = total * 0.08
+    delivery_charge = get_delivery_fee(total, session.get("delivery_type"))
+    grand_total = total + tax + delivery_charge
+    items_list = [f"{v['item']['name']} x{v['qty']}" for v in order.values()]
+    data = {
+        "order_id": str(order_id),
+        "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
+        "customer_name": session.get("name", ""),
+        "customer_number": f"+{customer_number}",
+        "items": ", ".join(items_list),
+        "subtotal": round(total, 2),
+        "tax": round(tax, 2),
+        "delivery_charge": round(delivery_charge, 2),
+        "grand_total": round(grand_total, 2),
+        "delivery_type": session.get("delivery_type", ""),
+        "address": session.get("address", ""),
+        "payment": session.get("payment", ""),
+        "language": session.get("lang", "en"),
+        "status": "New"
+    }
+    saved_orders[order_id] = {**data, "timestamp": time.time()}
+    customer_order_lookup.setdefault(customer_number, []).append(order_id)
+    customer_order_lookup[customer_number] = customer_order_lookup[customer_number][-10:]
+    manager_pending[order_id] = customer_number
+    print(f"Order #{order_id} linked to customer {customer_number}")
+    if GOOGLE_SHEET_WEBHOOK:
+        try:
+            async with aiohttp.ClientSession() as s:
+                async with s.post(GOOGLE_SHEET_WEBHOOK, json=data) as r:
+                    print(f"Sheet saved: {r.status}")
+        except Exception as e:
+            print(f"Sheet error: {e}")
+    else:
+        print(f"Order saved locally: #{order_id}")
 
 # ========== Main flow handler ==========
 async def _handle_flow_inner(sender, text, is_button=False):
@@ -611,19 +788,19 @@ async def _handle_flow_inner(sender, text, is_button=False):
         return
 
     if text == "ADD_COMBO_DL1":
-    deal_item = MENU["deals"]["items"]["DL1"]
-    if "DL1" in session["order"]:
-        session["order"]["DL1"]["qty"] += 1
-    else:
-        session["order"]["DL1"] = {"item": deal_item, "qty": 1}
-    session.pop("_pending_upsell_type", None)
-    last = session.get("last_added")
-    session["stage"] = "qty_control"
-    if last and last in session["order"]:
-        await send_qty_control(sender, last, session["order"][last]["item"], session["order"], lang)
-    else:
-        await send_cart_view(sender, session["order"], lang)
-    return
+        deal_item = MENU["deals"]["items"]["DL1"]
+        if "DL1" in session["order"]:
+            session["order"]["DL1"]["qty"] += 1
+        else:
+            session["order"]["DL1"] = {"item": deal_item, "qty": 1}
+        session.pop("_pending_upsell_type", None)
+        last = session.get("last_added")
+        session["stage"] = "qty_control"
+        if last and last in session["order"]:
+            await send_qty_control(sender, last, session["order"][last]["item"], session["order"], lang)
+        else:
+            await send_cart_view(sender, session["order"], lang)
+        return
 
     if text == "CHECKOUT":
         if session["order"]:
@@ -784,184 +961,6 @@ async def _handle_flow_inner(sender, text, is_button=False):
     session["conversation"].append({"role": "assistant", "content": reply})
     session["conversation"] = session["conversation"][-8:]
     await send_text_message(sender, reply)
-
-# ========== Order status helper ==========
-async def handle_order_status(sender, session, lang, text):
-    order_id = extract_order_number(text)
-    if not order_id:
-        order_id = session.get("order_id")
-    if not order_id:
-        orders_list = customer_order_lookup.get(sender, [])
-        if orders_list:
-            order_id = orders_list[-1]
-    if not order_id:
-        await send_text_message(
-            sender,
-            "I don't see an active order for you. Type *menu* to place a new order! 😊"
-        )
-        return
-    order_data = saved_orders.get(order_id)
-    customer_name = (order_data or {}).get("customer_name", "")
-    greet = f"Hi {customer_name}! " if customer_name else ""
-    if not order_data:
-        await send_text_message(
-            sender,
-            f"{greet}Let me check on order #{order_id} with our team right away! 🔍\n\n"
-            f"I'll get back to you in a moment. Thank you for your patience! 🙏"
-        )
-        await notify_manager_status(order_id, sender, reason="Data missing")
-        return
-    elapsed_min = (time.time() - order_data["timestamp"]) / 60
-    delivery_type = order_data.get("delivery_type", "pickup")
-    expected_max = 45 if delivery_type == "delivery" else 20
-    expected_min = 30 if delivery_type == "delivery" else 15
-    elapsed_int = int(elapsed_min)
-    if elapsed_min < expected_min:
-        remaining = expected_min - elapsed_int
-        msg = (
-            f"{greet}Your order #{order_id} is being prepared! 🍳\n\n"
-            f"⏱️ *Expected in about {remaining}-{expected_max - elapsed_int} more minutes*\n\n"
-            f"Our kitchen is working on it right now. Thanks for your patience! 😊"
-        )
-        await send_text_message(sender, msg)
-        return
-    if elapsed_min < expected_max:
-        remaining = expected_max - elapsed_int
-        if delivery_type == "delivery":
-            msg = (
-                f"{greet}Your order #{order_id} should be arriving any moment now! 🚚\n\n"
-                f"⏱️ *Around {max(1, remaining)} more minutes* to reach you.\n\n"
-                f"If it doesn't arrive soon, I'll check with the driver. Almost there! 😊"
-            )
-        else:
-            msg = (
-                f"{greet}Your order #{order_id} should be ready any moment! 🏪\n\n"
-                f"⏱️ *Around {max(1, remaining)} more minutes*.\n\n"
-                f"Feel free to head over — we'll have it hot and ready! 😊"
-            )
-        await send_text_message(sender, msg)
-        return
-    delay = elapsed_int - expected_max
-    if delivery_type == "delivery":
-        msg = (
-            f"{greet}I'm really sorry your order #{order_id} hasn't arrived yet! 🙏\n\n"
-            f"⏱️ It's been *{elapsed_int} minutes* — about {delay} mins longer than expected.\n\n"
-            f"I'm reaching out to our team right now to check on the driver. "
-            f"You'll have an update in the next few minutes. Thank you for your patience! 💚"
-        )
-    else:
-        msg = (
-            f"{greet}Sorry for the wait on order #{order_id}! 🙏\n\n"
-            f"⏱️ It's been *{elapsed_int} minutes* — about {delay} mins longer than expected.\n\n"
-            f"Let me check with the kitchen right now. I'll update you shortly! 💚"
-        )
-    await send_text_message(sender, msg)
-    await notify_manager_status(order_id, sender, reason=f"OVERDUE by {delay} mins — customer waiting")
-
-# ========== Manager notification helpers ==========
-async def notify_manager(customer_number, session, order_id):
-    order = session.get("order", {})
-    total = get_order_total(order)
-    tax = total * 0.08
-    delivery_charge = get_delivery_fee(total, session.get("delivery_type"))
-    grand_total = total + tax + delivery_charge
-    order_text = get_order_text(order)
-    lang_name = LANG_NAMES.get(session.get("lang", "en"), "English")
-    location_line = (
-        f"📍 Delivery: {session.get('address', '')}"
-        if session.get("delivery_type") == "delivery"
-        else "🏪 Pickup"
-    )
-    eta_line = "30-45 mins" if session.get("delivery_type") == "delivery" else "15-20 mins"
-    body_text = (
-        f"🔔 *NEW ORDER #{order_id}*\n\n"
-        f"👤 {session.get('name', 'N/A')}\n"
-        f"📱 +{customer_number}\n"
-        f"🌐 {lang_name}\n\n"
-        f"{order_text}\n\n"
-        f"Subtotal: ${total:.2f}\n"
-        f"Tax: ${tax:.2f}\n"
-        f"Delivery: ${delivery_charge:.2f}\n"
-        f"*Total: ${grand_total:.2f}*\n\n"
-        f"{location_line}\n"
-        f"💳 {session.get('payment', 'N/A')}\n"
-        f"⏱️ ETA: {eta_line}"
-    )
-    await send_manager_action_list(
-        order_id=order_id,
-        customer_number=customer_number,
-        header_text=f"🔔 New Order #{order_id}",
-        body_text=body_text,
-        footer_text="Tap Update Status when ready"
-    )
-    print(f"Manager notified: #{order_id}")
-
-async def notify_manager_status(order_id, customer_number, reason="Customer inquiry"):
-    order_data = saved_orders.get(order_id, {})
-    customer_name = order_data.get("customer_name", "Customer")
-    delivery_type = order_data.get("delivery_type", "pickup")
-    address = order_data.get("address", "")
-    elapsed_min = 0
-    if order_data.get("timestamp"):
-        elapsed_min = int((time.time() - order_data["timestamp"]) / 60)
-    location_line = f"📍 {address}" if address and delivery_type == "delivery" else "🏪 Pickup"
-    body_text = (
-        f"⚠️ *CUSTOMER WAITING — #{order_id}*\n\n"
-        f"👤 {customer_name}\n"
-        f"📱 +{customer_number}\n"
-        f"⏱️ Placed *{elapsed_min} min ago*\n"
-        f"🚚 {delivery_type.title()}\n"
-        f"{location_line}\n\n"
-        f"📢 {reason}"
-    )
-    await send_manager_action_list(
-        order_id=order_id,
-        customer_number=customer_number,
-        header_text=f"⚠️ Waiting — #{order_id}",
-        body_text=body_text,
-        footer_text="Tap to update customer now"
-    )
-
-# ========== Save to sheet ==========
-async def save_to_sheet(customer_number, session, order_id):
-    import aiohttp
-    from config import GOOGLE_SHEET_WEBHOOK
-    order = session.get("order", {})
-    total = get_order_total(order)
-    tax = total * 0.08
-    delivery_charge = get_delivery_fee(total, session.get("delivery_type"))
-    grand_total = total + tax + delivery_charge
-    items_list = [f"{v['item']['name']} x{v['qty']}" for v in order.values()]
-    data = {
-        "order_id": str(order_id),
-        "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
-        "customer_name": session.get("name", ""),
-        "customer_number": f"+{customer_number}",
-        "items": ", ".join(items_list),
-        "subtotal": round(total, 2),
-        "tax": round(tax, 2),
-        "delivery_charge": round(delivery_charge, 2),
-        "grand_total": round(grand_total, 2),
-        "delivery_type": session.get("delivery_type", ""),
-        "address": session.get("address", ""),
-        "payment": session.get("payment", ""),
-        "language": session.get("lang", "en"),
-        "status": "New"
-    }
-    saved_orders[order_id] = {**data, "timestamp": time.time()}
-    customer_order_lookup.setdefault(customer_number, []).append(order_id)
-    customer_order_lookup[customer_number] = customer_order_lookup[customer_number][-10:]
-    manager_pending[order_id] = customer_number
-    print(f"Order #{order_id} linked to customer {customer_number}")
-    if GOOGLE_SHEET_WEBHOOK:
-        try:
-            async with aiohttp.ClientSession() as s:
-                async with s.post(GOOGLE_SHEET_WEBHOOK, json=data) as r:
-                    print(f"Sheet saved: {r.status}")
-        except Exception as e:
-            print(f"Sheet error: {e}")
-    else:
-        print(f"Order saved locally: #{order_id}")
 
 # ========== Public entry point ==========
 async def handle_flow(sender, text, is_button=False):

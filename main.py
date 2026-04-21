@@ -10,14 +10,13 @@ import uvicorn
 import aiohttp
 
 # Import all modules
-from config import VERIFY_TOKEN, WHATSAPP_TOKEN, WHATSAPP_PHONE_NUMBER_ID, STRIPE_SECRET_KEY
+from config import VERIFY_TOKEN, WHATSAPP_TOKEN, WHATSAPP_PHONE_NUMBER_ID, STRIPE_SECRET_KEY, MANAGER_NUMBER
 from db import customer_sessions, saved_orders, customer_profiles
 from flow import handle_flow, new_session, get_session, save_profile, add_to_order_history
 from whatsapp_handlers import send_language_selection, send_text_message, send_cart_view
 from stripe_utils import handle_stripe_webhook
 from menu_data import MENU, reload_menu
 from strings import reload_strings
-from config import MANAGER_NUMBER
 
 stripe.api_key = STRIPE_SECRET_KEY
 
@@ -39,6 +38,12 @@ async def webhook(request: Request):
         if "messages" in entry:
             message = entry["messages"][0]
             sender = message["from"]
+
+            # Ignore messages from the manager number
+            if sender == MANAGER_NUMBER:
+                print(f"Ignoring message from manager number {sender}")
+                return {"status": "ok"}
+
             msg_type = message.get("type", "")
             if msg_type == "text":
                 text = message["text"]["body"].strip()
@@ -72,7 +77,7 @@ async def stripe_webhook_endpoint(request: Request):
     sig_header = request.headers.get("stripe-signature")
     return await handle_stripe_webhook(payload, sig_header)
 
-# ==================== STRIPE CHECKOUT SESSION (for frontend if needed) ====================
+# ==================== STRIPE CHECKOUT SESSION ====================
 @app.post("/create-checkout-session")
 async def create_checkout_session(request: Request):
     data = await request.json()
@@ -107,6 +112,7 @@ async def payment_cancel():
 # ==================== MANAGER UPDATE ====================
 @app.post("/manager-update")
 async def manager_update(request: Request):
+    import re
     from db import manager_pending, saved_orders
     from whatsapp_handlers import send_whatsapp_to_number
     from config import MANAGER_NUMBER
@@ -166,14 +172,6 @@ async def manager_update(request: Request):
         print(f"Manager update error: {e}")
         return {"status": "error"}
 
-from config import MANAGER_NUMBER
-
-# Inside the webhook POST handler, after getting `sender`:
-if sender == MANAGER_NUMBER:
-    # This is a manager message – ignore or handle separately
-    print(f"Ignoring message from manager number {sender}")
-    return {"status": "ok"}
-
 # ==================== TWILIO (optional) ====================
 @app.post("/twilio-call")
 async def twilio_call(request: Request):
@@ -189,7 +187,7 @@ async def twilio_sms(request: Request):
     print(f"SMS: {form.get('Body')} from {form.get('From')}")
     return {"status": "ok"}
 
-# ==================== ADMIN RELOAD (CMS feature) ====================
+# ==================== ADMIN RELOAD ====================
 @app.post("/admin/reload")
 async def admin_reload(secret: str):
     ADMIN_SECRET = os.getenv("ADMIN_SECRET", "change_this_in_railway")
