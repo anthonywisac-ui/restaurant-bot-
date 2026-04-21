@@ -5,11 +5,12 @@ import re
 import traceback
 from db import (
     customer_sessions, saved_orders, customer_profiles,
-    customer_order_lookup, manager_pending
+    customer_order_lookup, manager_pending,
+    save_profile, add_to_order_history, get_favorite_items, save_to_sheet
 )
 from config import (
     POST_ORDER_WINDOW, MIN_DELIVERY_ORDER, MIN_PICKUP_ORDER,
-    LANG_NAMES, FREE_DELIVERY_THRESHOLD, DELIVERY_CHARGE, GOOGLE_SHEET_WEBHOOK
+    LANG_NAMES, FREE_DELIVERY_THRESHOLD, DELIVERY_CHARGE
 )
 from strings import t
 from utils import (
@@ -30,7 +31,7 @@ from stripe_utils import create_stripe_checkout_session
 from ai_utils import get_ai_response
 from menu_data import MENU
 
-# Global constants that were originally in main.py
+# Global constants (unchanged)
 DEAL_RULES = {
     "DL1": {"requires": "burger_in_cart"},
     "DL2": {"picks": ["burger"]},
@@ -49,7 +50,7 @@ SIDE_CHOICES = {
     "SALAD": "Caesar Salad",
 }
 
-# ========== Session management ==========
+# ========== Session management (still needed in flow) ==========
 def new_session(sender=None, table_number=None):
     profile = customer_profiles.get(sender, {}) if sender else {}
     is_returning = bool(profile.get("name"))

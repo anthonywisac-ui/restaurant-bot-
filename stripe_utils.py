@@ -1,9 +1,8 @@
 import stripe
 import time
 from config import STRIPE_SECRET_KEY, STRIPE_WEBHOOK_SECRET
-from db import saved_orders
+from db import saved_orders, save_profile, add_to_order_history, save_to_sheet
 from whatsapp_handlers import send_text_message, send_order_confirmed, send_manager_action_list
-from flow import save_profile, add_to_order_history, save_to_sheet
 from utils import get_order_total, get_delivery_fee, get_order_text
 from config import LANG_NAMES
 
@@ -50,7 +49,6 @@ async def handle_stripe_webhook(payload, sig_header):
             print(f"Order {order_id} not found in saved_orders")
             return {"status": "ignored"}
 
-        # Retrieve the saved customer session
         order_data = saved_orders[order_id]
         session_data = order_data.get("session")
         sender = order_data["sender"]
@@ -59,21 +57,21 @@ async def handle_stripe_webhook(payload, sig_header):
             print(f"No session data for order {order_id}")
             return {"status": "error"}
 
-        # --- 1. Send FULL order confirmation to customer ---
+        # 1. Send full order confirmation to customer
         lang = session_data.get("lang", "en")
         await send_order_confirmed(sender, session_data, lang)
 
-        # --- 2. Save order history and profile ---
+        # 2. Save profile and history
         save_profile(sender, session_data)
         add_to_order_history(sender, order_id, session_data["order"])
 
-        # --- 3. Notify manager with full order details ---
+        # 3. Notify manager
         await notify_manager_via_webhook(sender, session_data, order_id)
 
-        # --- 4. Save to Google Sheet ---
+        # 4. Save to sheet
         await save_to_sheet(sender, session_data, order_id)
 
-        # --- 5. Update order status ---
+        # 5. Mark as paid
         saved_orders[order_id]["payment_status"] = "paid"
 
         print(f"Order {order_id} fully confirmed and manager notified")
@@ -81,7 +79,6 @@ async def handle_stripe_webhook(payload, sig_header):
     return {"status": "ok"}
 
 async def notify_manager_via_webhook(customer_number, session, order_id):
-    """Replicate the manager notification logic from flow.py"""
     from config import MANAGER_NUMBER
 
     order = session.get("order", {})
@@ -92,7 +89,6 @@ async def notify_manager_via_webhook(customer_number, session, order_id):
     order_text = get_order_text(order)
     lang_name = LANG_NAMES.get(session.get("lang", "en"), "English")
 
-    # Determine location line based on order type
     delivery_type = session.get("delivery_type")
     if delivery_type == "delivery":
         location_line = f"📍 Delivery: {session.get('address', '')}"
