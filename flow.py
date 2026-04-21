@@ -341,7 +341,8 @@ async def notify_manager(customer_number, session, order_id):
     location_line = (
         f"📍 Delivery: {session.get('address', '')}"
         if session.get("delivery_type") == "delivery"
-        else "🏪 Pickup"
+        else "🏪 Pickup" if session.get("delivery_type") == "pickup"
+        else f"🍽️ Dine-in Table {session.get('table_number', '?')}"
     )
     eta_line = "30-45 mins" if session.get("delivery_type") == "delivery" else "15-20 mins"
     body_text = (
@@ -877,31 +878,36 @@ async def _handle_flow_inner(sender, text, is_button=False):
         return
 
     # ── PAYMENT BLOCK ──
-  if text == "CARD_STRIPE":
-    total = get_order_total(session["order"])
-    tax = total * 0.08
-    delivery_charge = get_delivery_fee(total, session.get("delivery_type"))
-    grand_total = total + tax + delivery_charge
+    if text in ["CASH", "CARD_STRIPE", "APPLE_PAY"]:
+        payment_map = {"CASH": t(lang, "cash"), "CARD_STRIPE": t(lang, "card"), "APPLE_PAY": t(lang, "apple_pay")}
+        session["payment"] = payment_map[text]
 
-    order_id = str(int(time.time()))
+        if text == "CARD_STRIPE":
+            total = get_order_total(session["order"])
+            tax = total * 0.08
+            delivery_charge = get_delivery_fee(total, session.get("delivery_type"))
+            grand_total = total + tax + delivery_charge
 
-    # Store the ENTIRE session so the webhook has all data (order, name, address, table, language, etc.)
-    saved_orders[order_id] = {
-        "session": session.copy(),   # save a copy of the full session
-        "sender": sender,
-        "timestamp": time.time()
-    }
-    # Also keep the old structure for compatibility (optional)
-    saved_orders[order_id]["order"] = session["order"]
-    saved_orders[order_id]["customer_name"] = session.get("name", "")
+            order_id = str(int(time.time()))
 
-    payment_url = await create_stripe_checkout_session(order_id, grand_total)
-    if payment_url:
-        await send_text_message(sender, f"💳 Pay here:\n{payment_url}")
-    else:
-        await send_text_message(sender, "❌ Payment link creation failed. Please try again or choose another payment method.")
-    return
+            # Store the ENTIRE session so the webhook has all data (order, name, address, table, language, etc.)
+            saved_orders[order_id] = {
+                "session": session.copy(),   # save a copy of the full session
+                "sender": sender,
+                "timestamp": time.time()
+            }
+            # Also keep the old structure for compatibility (optional)
+            saved_orders[order_id]["order"] = session["order"]
+            saved_orders[order_id]["customer_name"] = session.get("name", "")
 
+            payment_url = await create_stripe_checkout_session(order_id, grand_total)
+            if payment_url:
+                await send_text_message(sender, f"💳 Pay here:\n{payment_url}")
+            else:
+                await send_text_message(sender, "❌ Payment link creation failed. Please try again or choose another payment method.")
+            return
+
+        # For cash and Apple Pay, proceed to final confirmation
         order_id = await send_order_confirmed(sender, session, lang)
         session["order_id"] = order_id
         save_profile(sender, session)
