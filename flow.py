@@ -611,17 +611,19 @@ async def _handle_flow_inner(sender, text, is_button=False):
         return
 
     if text == "ADD_COMBO_DL1":
-        deal_item = MENU["deals"]["items"]["DL1"]
-        if "DL1" not in session["order"]:
-            session["order"]["DL1"] = {"item": deal_item, "qty": 1}
-        session.pop("_pending_upsell_type", None)
-        last = session.get("last_added")
-        session["stage"] = "qty_control"
-        if last and last in session["order"]:
-            await send_qty_control(sender, last, session["order"][last]["item"], session["order"], lang)
-        else:
-            await send_cart_view(sender, session["order"], lang)
-        return
+    deal_item = MENU["deals"]["items"]["DL1"]
+    if "DL1" in session["order"]:
+        session["order"]["DL1"]["qty"] += 1
+    else:
+        session["order"]["DL1"] = {"item": deal_item, "qty": 1}
+    session.pop("_pending_upsell_type", None)
+    last = session.get("last_added")
+    session["stage"] = "qty_control"
+    if last and last in session["order"]:
+        await send_qty_control(sender, last, session["order"][last]["item"], session["order"], lang)
+    else:
+        await send_cart_view(sender, session["order"], lang)
+    return
 
     if text == "CHECKOUT":
         if session["order"]:

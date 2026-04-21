@@ -17,6 +17,7 @@ from whatsapp_handlers import send_language_selection, send_text_message, send_c
 from stripe_utils import handle_stripe_webhook
 from menu_data import MENU, reload_menu
 from strings import reload_strings
+from config import MANAGER_NUMBER
 
 stripe.api_key = STRIPE_SECRET_KEY
 
@@ -106,35 +107,46 @@ async def payment_cancel():
 # ==================== MANAGER UPDATE ====================
 @app.post("/manager-update")
 async def manager_update(request: Request):
-    from db import manager_pending
+    from db import manager_pending, saved_orders
     from whatsapp_handlers import send_whatsapp_to_number
+    from config import MANAGER_NUMBER
+
     data = await request.json()
     order_id_str = str(data.get("order_id", ""))
     status = data.get("status", "").upper()
     print(f"Manager update: Order #{order_id_str} -> {status}")
+
     try:
         order_id = int(order_id_str)
         customer_number = manager_pending.get(order_id)
         if not customer_number:
+            print(f"No customer for order #{order_id}")
             return {"status": "not_found"}
+
         order_data = saved_orders.get(order_id, {})
         customer_name = order_data.get("customer_name", "Customer")
+        delivery_type = order_data.get("delivery_type", "pickup")
+
         if "READY" in status and "DELIVERY" not in status:
-            if order_data.get("delivery_type") == "pickup":
-                msg = f"Great news, {customer_name}! Your order #{order_id} is *READY for pickup!* Please come collect it"
+            if delivery_type == "pickup":
+                msg = f"🎉 Great news, {customer_name}! Your order #{order_id} is *READY for pickup!* Please come collect it."
             else:
-                msg = f"Great news, {customer_name}! Your order #{order_id} is ready and *OUT FOR DELIVERY* Should arrive in 15-20 minutes!"
+                msg = f"🚚 Great news, {customer_name}! Your order #{order_id} is ready and *OUT FOR DELIVERY*. Should arrive in 15-20 minutes!"
         elif "OUT FOR DELIVERY" in status or "ON THE WAY" in status:
-            msg = f"Hey {customer_name}! Your order #{order_id} is *on the way!* Should arrive in 15-20 minutes!"
+            msg = f"🚚 Hey {customer_name}, your order #{order_id} is *on the way!* Should arrive in 15-20 minutes!"
         elif "DELAYED" in status:
             delay_match = re.search(r'DELAYED\s*(\d+)', status)
             delay_time = delay_match.group(1) + " minutes" if delay_match else "a little longer"
-            msg = f"Hi {customer_name}, your order #{order_id} will take *{delay_time}* more than expected. Sorry for the wait! 🙏"
+            msg = f"⏱️ Hi {customer_name}, your order #{order_id} will take *{delay_time}* more than expected. Sorry for the wait! 🙏"
         elif "CANCELLED" in status:
-            msg = f"Hi {customer_name}, unfortunately order #{order_id} has been *cancelled*. Please contact us for a refund."
+            msg = f"❌ Hi {customer_name}, unfortunately order #{order_id} has been *cancelled*. Please contact us for a refund."
         else:
-            msg = f"Update on your order #{order_id}: {status}"
+            msg = f"📢 Update on your order #{order_id}: {status}"
+
+        # Send to customer
         await send_whatsapp_to_number(str(customer_number), msg)
+        print(f"Customer {customer_number} updated for order #{order_id}")
+
         # Confirm to manager
         status_label = status
         if "READY" in status and "DELIVERY" not in status:
@@ -148,10 +160,19 @@ async def manager_update(request: Request):
             status_label = "CANCELLED"
         confirm_msg = f"✅ Order #{order_id} marked as *{status_label}*\n\nCustomer {customer_name} has been notified."
         await send_whatsapp_to_number(MANAGER_NUMBER, confirm_msg)
+
         return {"status": "ok"}
     except Exception as e:
         print(f"Manager update error: {e}")
         return {"status": "error"}
+
+from config import MANAGER_NUMBER
+
+# Inside the webhook POST handler, after getting `sender`:
+if sender == MANAGER_NUMBER:
+    # This is a manager message – ignore or handle separately
+    print(f"Ignoring message from manager number {sender}")
+    return {"status": "ok"}
 
 # ==================== TWILIO (optional) ====================
 @app.post("/twilio-call")
