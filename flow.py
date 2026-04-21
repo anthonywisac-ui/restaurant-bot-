@@ -448,40 +448,36 @@ async def _handle_flow_inner(sender, text, is_button=False):
             session["stage"] = "address_update"
             await send_text_message(sender, "Sure! What's your new delivery address?")
         elif text == "REPEAT_CONFIRM":
-            profile = customer_profiles.get(sender, {})
-            history = profile.get("order_history", [])
-            if history:
-                last_items = history[-1].get("items", [])
-                session["order"] = {}
-                for it in last_items:
-                    if isinstance(it, dict):
-                        iid = it.get("item_id")
-                        qty = it.get("qty", 1)
-                        if iid:
-                            _cat, item = find_item(iid, MENU)
-                            if item:
-                                session["order"][iid] = {"item": item, "qty": qty}
-                    else:
-                        # legacy: match by name
-                        for cat_data in MENU.values():
-                            for item_id, item in cat_data["items"].items():
-                                if item["name"] == it:
-                                    session["order"][item_id] = {"item": item, "qty": 1}
-                if session["order"]:
-                    session["stage"] = "confirm"
-                    await send_order_summary(sender, session["order"], lang)
-                else:
-                    session["stage"] = "menu"
-                    await send_main_menu(sender, session["order"], lang)
+    print(f"Repeat confirm triggered with text: {text}")
+    profile = customer_profiles.get(sender, {})
+    history = profile.get("order_history", [])
+    if history:
+        last_items = history[-1].get("items", [])
+        session["order"] = {}
+        for it in last_items:
+            if isinstance(it, dict):
+                iid = it.get("item_id")
+                qty = it.get("qty", 1)
+                if iid:
+                    _cat, item = find_item(iid, MENU)
+                    if item:
+                        session["order"][iid] = {"item": item, "qty": qty}
             else:
-                session["stage"] = "menu"
-                await send_main_menu(sender, session["order"], lang)
-            return
+                # legacy: match by name
+                for cat_data in MENU.values():
+                    for item_id, item in cat_data["items"].items():
+                        if item["name"] == it:
+                            session["order"][item_id] = {"item": item, "qty": 1}
+        if session["order"]:
+            session["stage"] = "confirm"
+            await send_order_summary(sender, session["order"], lang)
         else:
             session["stage"] = "menu"
             await send_main_menu(sender, session["order"], lang)
-        return
-
+    else:
+        session["stage"] = "menu"
+        await send_main_menu(sender, session["order"], lang)
+    return
     if stage == "address_update":
         if not is_valid_address(text):
             await send_text_message(sender, t(lang, "invalid_address"))
