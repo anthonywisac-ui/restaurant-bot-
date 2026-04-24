@@ -3,6 +3,7 @@ import time
 import random
 import re
 import traceback
+import asyncio
 from db import (
     customer_sessions, saved_orders, customer_profiles,
     customer_order_lookup, manager_pending,
@@ -49,6 +50,9 @@ SIDE_CHOICES = {
     "SLAW": "Coleslaw",
     "SALAD": "Caesar Salad",
 }
+
+# Cache for interactive category lists
+_CATEGORY_CACHE = {}  # key: (lang, cat_key) -> payload dict
 
 # ========== Session management ==========
 def new_session(sender=None, table_number=None):
@@ -356,6 +360,55 @@ async def notify_manager_status(order_id, customer_number, reason="Customer inqu
         footer_text="Tap to update customer now"
     )
 
+# ========== Quantity shortcut helper ==========
+async def try_add_by_quantity(sender, session, text_lower, lang):
+    """Check if user typed something like '4 FF1' or '3 Classic Burger' and add directly."""
+    match = re.match(r'^(\d+)\s+(.+)$', text_lower.strip())
+    if not match:
+        return False
+    qty = int(match.group(1))
+    if qty < 1 or qty > 50:
+        return False
+    search_term = match.group(2).strip()
+    # Search by item ID first
+    item_id = None
+    found_item = None
+    # Check all categories for ID match
+    for cat in MENU.values():
+        if "items" in cat:
+            for iid, item in cat["items"].items():
+                if iid.lower() == search_term:
+                    item_id = iid
+                    found_item = item
+                    break
+            if item_id:
+                break
+    # If not found by ID, try by name (case insensitive)
+    if not item_id:
+        for cat in MENU.values():
+            if "items" in cat:
+                for iid, item in cat["items"].items():
+                    if item["name"].lower() == search_term:
+                        item_id = iid
+                        found_item = item
+                        break
+                if item_id:
+                    break
+    if not item_id or not found_item:
+        return False
+    # Now add the item with given quantity
+    if item_id in session["order"]:
+        session["order"][item_id]["qty"] += qty
+    else:
+        session["order"][item_id] = {"item": found_item, "qty": qty}
+    session["last_added"] = item_id
+    # Skip quantity control screen and go back to menu or cart view
+    await send_text_message(sender, f"✅ Added {qty} x {found_item['name']}")
+    # Show updated cart
+    await send_cart_view(sender, session["order"], lang)
+    session["stage"] = "menu"
+    return True
+
 # ========== Main flow handler ==========
 async def _handle_flow_inner(sender, text, is_button=False):
     session = get_session(sender)
@@ -395,6 +448,7 @@ async def _handle_flow_inner(sender, text, is_button=False):
                 session = customer_sessions[sender]
                 stage = session["stage"]
             else:
+                # AI only in post_order stage
                 reply = await get_ai_response(sender, text, lang, session)
                 await send_text_message(sender, reply)
                 return
@@ -411,6 +465,13 @@ async def _handle_flow_inner(sender, text, is_button=False):
     if is_order_status_query(text_lower) and stage not in ordering_stages:
         await handle_order_status(sender, session, lang, text)
         return
+
+    # ========== QUANTITY SHORTCUT (e.g., "4 FF1") ==========
+    # Check before any other command so user can quickly add multiple items
+    if not is_button and stage not in {"get_name", "address", "payment"}:
+        added = await try_add_by_quantity(sender, session, text_lower, lang)
+        if added:
+            return
 
     if stage == "returning":
         profile = customer_profiles.get(sender, {})
@@ -857,8 +918,9 @@ async def _handle_flow_inner(sender, text, is_button=False):
         session["just_confirmed_at"] = time.time()
         save_profile(sender, session)
         add_to_order_history(sender, order_id, session["order"])
-        await notify_manager(sender, session, order_id)
-        await save_to_sheet(sender, session, order_id)
+        # Run non-critical tasks in background
+        asyncio.create_task(notify_manager(sender, session, order_id))
+        asyncio.create_task(save_to_sheet(sender, session, order_id))
         session["stage"] = "post_order"
         session["post_order_at"] = time.time()
         session["order"] = {}
@@ -907,6 +969,12 @@ async def _handle_flow_inner(sender, text, is_button=False):
         await send_category_items(sender, cat_guess, session["order"], lang)
         return
 
+    # Final fallback: If not in post_order, fast local reply (no AI)
+    if session.get("stage") != "post_order":
+        await send_text_message(sender, t(lang, "sorry_not_understood") + " " + t(lang, "menu_prompt"))
+        return
+
+    # Only for post_order stage we call AI
     session["conversation"].append({"role": "user", "content": text})
     reply = await get_ai_response(sender, text, lang, session)
     session["conversation"].append({"role": "assistant", "content": reply})
